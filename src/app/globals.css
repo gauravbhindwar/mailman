@@ -2,20 +2,24 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/* ...existing code... */
+
+body.light {
+  background-color: white;
+  color: black;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+body.dark {
+  background-color: black;
+  color: white;
 }
 
-body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+.navbar.light {
+  background-color: white;
+  color: black;
+}
+
+.navbar.dark {
+  background-color: black;
+  color: white;
 }
