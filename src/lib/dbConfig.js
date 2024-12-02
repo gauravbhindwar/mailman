@@ -9,7 +9,6 @@ export const connect = async () => {
 
   try {
     const db = await mongoose.connect(process.env.MONGODB_URI, {
-      useNewUrlParser: true,
       serverSelectionTimeoutMS: 15000, // Timeout after 15s instead of 30s
       socketTimeoutMS: 45000, // Close sockets after 45s of inactivity
     });

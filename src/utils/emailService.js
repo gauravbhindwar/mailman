@@ -7,8 +7,16 @@ import { simpleParser } from 'mailparser';
 import { decrypt } from './encryption';
 import { connect } from '../lib/dbConfig';
 import { generateConversationId } from './emailUtils';
+import NodeCache from 'node-cache';
 
 const ITEMS_PER_PAGE = 20;
+
+// Initialize cache with 5 minute TTL
+const emailCache = new NodeCache({ stdTTL: 300 });
+
+// Add connection pool
+const imapConnectionPool = new Map();
+const MAX_RETRIES = 3;
 
 // Email validation
 const validateEmail = (email) => {
@@ -194,8 +202,26 @@ export const fetchAndStoreExternalEmails = async (userId) => {
 
 // Update IMAP configuration to handle connection issues
 export const fetchEmailsIMAP = async (user) => {
-  // Get user's IMAP credentials
+  const retryWithDelay = async (fn, retries = MAX_RETRIES, delay = 1000) => {
+    try {
+      return await fn();
+    } catch (error) {
+      if (retries > 0) {
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return retryWithDelay(fn, retries - 1, delay * 2);
+      }
+      throw error;
+    }
+  };
+
+  // Check connection pool
+  const poolKey = `${user._id}:${Date.now()}`;
+  if (imapConnectionPool.has(poolKey)) {
+    return imapConnectionPool.get(poolKey);
+  }
+
   const credentials = user.getEmailCredentials();
+  // Get user's IMAP credentials
   
   // Use default Gmail configuration if user config is not set
   const imapConfig = {
@@ -213,7 +239,7 @@ export const fetchEmailsIMAP = async (user) => {
     debug: console.log // Add debug logging
   };
 
-  return new Promise((resolve, reject) => {
+  const fetchEmails = () => new Promise((resolve, reject) => {
     const imap = new Imap(imapConfig);
     const emails = [];
 
@@ -282,6 +308,14 @@ export const fetchEmailsIMAP = async (user) => {
       reject(err);
     }
   });
+
+  const emails = await retryWithDelay(() => fetchEmails());
+  imapConnectionPool.set(poolKey, emails);
+  
+  // Cleanup pool after 5 minutes
+  setTimeout(() => imapConnectionPool.delete(poolKey), 300000);
+  
+  return emails;
 };
 
 // Email CRUD operations
@@ -345,6 +379,13 @@ export const sendEmail = async ({ from, to, subject, content }) => {
 
 export const getEmails = async (userId, { folder, page = 1, limit = ITEMS_PER_PAGE, search = '' }) => {
   try {
+    const cacheKey = `emails:${userId}:${folder}:${page}:${limit}:${search}`;
+    const cached = emailCache.get(cacheKey);
+    
+    if (cached) {
+      return cached;
+    }
+
     await connect();
     
     const query = {
@@ -358,40 +399,27 @@ export const getEmails = async (userId, { folder, page = 1, limit = ITEMS_PER_PA
       })
     };
 
-    const conversations = await Email.find(query)
-      .sort({ lastMessageAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(limit)
-      .populate('participants', 'name email')
-      .populate('messages.from', 'name email')
-      .lean();
+    const [conversations, total] = await Promise.all([
+      Email.find(query)
+        .select('subject messages.content messages.createdAt participants lastMessageAt status')
+        .sort({ lastMessageAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .populate('participants', 'name email')
+        .lean(),
+      Email.countDocuments(query)
+    ]);
 
-    // Serialize the data to remove MongoDB specific objects
-    const serializedEmails = conversations.map(conv => ({
-      ...conv,
-      id: conv._id.toString(),
-      participants: conv.participants?.map(p => ({
-        id: p._id.toString(),
-        name: p.name,
-        email: p.email
+    const result = {
+      emails: conversations.map(conv => ({
+        ...conv,
+        id: conv._id.toString(),
+        participants: conv.participants?.map(p => ({
+          id: p._id.toString(),
+          name: p.name,
+          email: p.email
+        }))
       })),
-      messages: conv.messages.map(msg => ({
-        ...msg,
-        id: msg._id.toString(),
-        from: msg.from ? {
-          id: msg.from._id.toString(),
-          name: msg.from.name,
-          email: msg.from.email
-        } : null,
-        createdAt: msg.createdAt.toISOString()
-      })),
-      lastMessageAt: conv.lastMessageAt.toISOString()
-    }));
-
-    const total = await Email.countDocuments(query);
-
-    return {
-      emails: serializedEmails,
       pagination: {
         total,
         pages: Math.ceil(total / limit),
@@ -399,6 +427,9 @@ export const getEmails = async (userId, { folder, page = 1, limit = ITEMS_PER_PA
         hasMore: page * limit < total
       }
     };
+
+    emailCache.set(cacheKey, result);
+    return result;
   } catch (error) {
     console.error('Failed to fetch emails:', error);
     throw new Error('Failed to fetch emails');
