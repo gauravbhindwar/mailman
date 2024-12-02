@@ -24,16 +24,16 @@ const validateEmail = (email) => {
   return regex.test(email);
 };
 
-// Create dynamic SMTP transporter with Gmail defaults
-const createSMTPTransport = () => {
+// Create dynamic SMTP transporter with user config
+const createSMTPTransport = (userConfig) => {
   return nodemailer.createTransport({
-    service: process.env.EMAIL_SERVICE,
-    host: process.env.EMAIL_HOST,
-    port: parseInt(process.env.EMAIL_PORT),
-    secure: process.env.EMAIL_SECURE === 'true',
+    service: userConfig?.smtp?.service || 'gmail',
+    host: userConfig?.smtp?.host || 'smtp.gmail.com',
+    port: parseInt(userConfig?.smtp?.port) || 465,
+    secure: userConfig?.smtp?.secure ?? true,
     auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
+      user: userConfig?.smtp?.user,
+      pass: userConfig?.smtp?.password,
     },
     tls: {
       rejectUnauthorized: false,
@@ -60,11 +60,44 @@ export const sendEmailSMTP = async ({ from, to, subject, content, attachments = 
   try {
     await connect();
     
-    const transporter = createSMTPTransport();
-    await transporter.verify();
+    if (!from?.userId) {
+      throw new Error('Missing sender information');
+    }
+
+    const user = await User.findById(from.userId)
+      .select('+emailConfig.smtp.password')
+      .lean();
+
+    if (!user) {
+      throw new Error(`User not found with ID: ${from.userId}`);
+    }
+
+    if (!user.emailConfig?.smtp?.password) {
+      throw new Error('SMTP configuration not found. Please configure your email settings first.');
+    }
+
+    const credentials = {
+      smtp: {
+        ...user.emailConfig.smtp,
+        password: user.emailConfig.smtp.password ? decrypt(user.emailConfig.smtp.password) : null
+      }
+    };
+
+    if (!credentials.smtp.password) {
+      throw new Error('SMTP password not found or could not be decrypted');
+    }
+
+    const transporter = createSMTPTransport(credentials);
+    
+    try {
+      await transporter.verify();
+    } catch (verifyError) {
+      console.error('SMTP Verification Error:', verifyError);
+      throw new Error('Failed to verify SMTP connection. Please check your email settings and ensure app password is configured correctly.');
+    }
 
     const mailOptions = {
-      from: process.env.EMAIL_USER, // Use Gmail address from env
+      from: credentials.smtp.user,
       to,
       subject,
       html: content,
@@ -75,7 +108,8 @@ export const sendEmailSMTP = async ({ from, to, subject, content, attachments = 
     return info;
   } catch (error) {
     console.error('SMTP Error:', error);
-    throw new Error('Failed to send email via SMTP');
+    error.status = error.message.includes('configuration') ? 400 : 500;
+    throw error;
   }
 };
 
@@ -200,6 +234,12 @@ export const fetchAndStoreExternalEmails = async (userId) => {
   }
 };
 
+// Add generateXOAuth2Token function
+const generateXOAuth2Token = (user, password) => {
+  const authData = `user=${user}\x01auth=Bearer ${password}\x01\x01`;
+  return Buffer.from(authData).toString('base64');
+};
+
 // Update IMAP configuration to handle connection issues
 export const fetchEmailsIMAP = async (user) => {
   const retryWithDelay = async (fn, retries = MAX_RETRIES, delay = 1000) => {
@@ -220,28 +260,60 @@ export const fetchEmailsIMAP = async (user) => {
     return imapConnectionPool.get(poolKey);
   }
 
-  const credentials = user.getEmailCredentials();
-  // Get user's IMAP credentials
+  // Get user with email config including encrypted passwords
+  const userWithConfig = await User.findById(user._id)
+    .select('+emailConfig.smtp.password +emailConfig.imap.password');
   
-  // Use default Gmail configuration if user config is not set
+  if (!userWithConfig?.emailConfig?.imap) {
+    throw new Error('IMAP configuration not found');
+  }
+
+  const credentials = userWithConfig.getEmailCredentials();
+
+  // Simple IMAP config with PLAIN auth
   const imapConfig = {
-    user: credentials?.imap?.user || process.env.EMAIL_USER,
-    password: credentials?.imap?.password || process.env.EMAIL_PASS,
-    host: credentials?.imap?.host || 'imap.gmail.com',
-    port: credentials?.imap?.port || 993,
+    user: credentials.imap.user,
+    password: credentials.imap.password,
+    host: credentials.imap.host,
+    port: credentials.imap.port,
     tls: true,
     tlsOptions: { 
       rejectUnauthorized: false,
-      servername: credentials?.imap?.host || 'imap.gmail.com'
+      servername: credentials.imap.host
     },
     authTimeout: 30000,
     connTimeout: 30000,
-    debug: console.log // Add debug logging
+    debug: process.env.NODE_ENV === 'development' ? console.log : null,
+    auth: {
+      user: credentials.imap.user,
+      password: credentials.imap.password,
+      // Use PLAIN auth
+      authMethod: 'PLAIN'
+    }
   };
+
+  console.log('Connecting with config:', {
+    ...imapConfig,
+    password: '***hidden***'
+  });
 
   const fetchEmails = () => new Promise((resolve, reject) => {
     const imap = new Imap(imapConfig);
     const emails = [];
+
+    const handleError = (error) => {
+      console.error('IMAP Error:', error);
+      if (error.source === 'authentication') {
+        console.error(`
+          Authentication failed for ${credentials.imap.user}. 
+          Please ensure:
+          1. App Password is used if 2FA is enabled
+          2. Less secure app access is enabled (if not using App Password)
+          3. IMAP is enabled in Gmail settings
+        `);
+      }
+      reject(error);
+    };
 
     const processMessage = async (stream) => {
       try {
@@ -292,10 +364,7 @@ export const fetchEmailsIMAP = async (user) => {
       });
     });
 
-    imap.once('error', (err) => {
-      console.error('IMAP connection error:', err);
-      reject(err);
-    });
+    imap.once('error', handleError);
 
     imap.once('end', () => {
       console.log('IMAP connection ended');
@@ -304,8 +373,7 @@ export const fetchEmailsIMAP = async (user) => {
     try {
       imap.connect();
     } catch (err) {
-      console.error('IMAP connect error:', err);
-      reject(err);
+      handleError(err);
     }
   });
 
@@ -321,12 +389,20 @@ export const fetchEmailsIMAP = async (user) => {
 // Email CRUD operations
 export const sendEmail = async ({ from, to, subject, content }) => {
   if (!validateEmail(to)) {
-    throw new Error('Invalid recipient email address');
+    const error = new Error('Invalid recipient email address');
+    error.status = 400;
+    throw error;
+  }
+
+  if (!from?.userId) {
+    const error = new Error('Sender ID is required');
+    error.status = 400;
+    throw error;
   }
 
   try {
     const smtpResult = await sendEmailSMTP({ 
-      from: from.email, 
+      from, 
       to, 
       subject, 
       content 
@@ -373,7 +449,8 @@ export const sendEmail = async ({ from, to, subject, content }) => {
     return conversation;
   } catch (error) {
     console.error('Failed to send email:', error);
-    throw new Error(`Failed to send email: ${error.message}`);
+    error.status = error.status || 500;
+    throw error;
   }
 };
 
