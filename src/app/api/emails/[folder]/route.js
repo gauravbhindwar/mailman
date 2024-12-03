@@ -51,22 +51,30 @@ export async function GET(req, context) {
     }
 
     console.log(`🔄 Fetching fresh ${folder} emails`);
-    result = await fetchEmailsIMAP(user, folder, page, limit);
+    try {
+      result = await fetchEmailsIMAP(user, folder, page, limit);
 
-    if (result.success) {
-      // Set cache with 5 minute TTL for better performance
-      cache.set(cacheKey, result, 300); // 5 minute TTL
-      return NextResponse.json({
-        ...result,
-        cached: false
-      });
+      if (result.success) {
+        // Set cache with 5 minute TTL for better performance
+        cache.set(cacheKey, result, 300); // 5 minute TTL
+        return NextResponse.json({
+          ...result,
+          cached: false
+        });
+      }
+
+      throw new Error(result.error || `Failed to fetch ${folder} emails`);
+    } catch (fetchError) {
+      console.error('Email fetch error:', fetchError);
+      return NextResponse.json(
+        { error: fetchError.message || 'Failed to fetch emails' },
+        { status: 500 }
+      );
     }
-
-    throw new Error(result.error || `Failed to fetch ${folder} emails`);
   } catch (error) {
     console.error('❌ Email API error:', error);
     return NextResponse.json(
-      { error: error.message || "Failed to fetch emails" },
+      { error: 'Internal server error' },
       { status: 500 }
     );
   }

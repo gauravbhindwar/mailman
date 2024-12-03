@@ -197,7 +197,7 @@ function PaginationBar({ currentPage, totalPages, onPageChange }) {
               whileTap={{ scale: 0.95 }}
               onClick={() => onPageChange(pageNum)}
               className={`px-4 py-2 rounded-md ${
-                currentPage === pageNum 
+                currentPage === pageNum               
                   ? 'bg-blue-500 text-white' 
                   : 'border hover:bg-gray-50'
               }`}
@@ -229,17 +229,22 @@ function InboxEmailList({ userId, page, setPage, showAll }) {
     fetcher,
     {
       revalidateOnFocus: false,
-      revalidateOnReconnect: false,
       dedupingInterval: 30000,
-      refreshInterval: 0,
-      refreshWhenHidden: false,
-      refreshWhenOffline: false,
-      shouldRetryOnError: true,
+      suspense: false, // Remove suspense
+      keepPreviousData: true,
       onError: (err) => {
         console.error('Fetch error:', err);
       }
     }
   );
+
+  // Prefetch next page
+  useEffect(() => {
+    if (data?.pagination?.hasMore) {
+      const nextPage = page + 1;
+      fetcher(`/api/emails/${folder}?page=${nextPage}&limit=${limit}`);
+    }
+  }, [data, page, folder, limit]);
 
   const handleRefresh = useCallback(async () => {
     try {
@@ -316,35 +321,26 @@ function InboxEmailList({ userId, page, setPage, showAll }) {
         onPageChange={setPage}
       />
       
-      <div className="flex-1 relative overflow-auto">
-        <motion.div
-          variants={listVariants}
-          initial="hidden"
-          animate="visible"
-          className="h-full"
-        >
-          <AnimatePresence>
-            {emails.length > 0 ? (
-              <EmailList 
-                emails={emails} 
-                type="inbox"
-                selectedEmails={selectedEmails}
-                setSelectedEmails={setSelectedEmails}
-                itemVariants={itemVariants}
-                showAll={showAll} // Pass showAll prop
-              />
-            ) : (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="text-center py-8 text-gray-500"
-              >
-                <p>No emails found</p>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </motion.div>
+      <div className="flex-1 overflow-hidden">
+        {emails.length > 0 ? (
+          <EmailList 
+            emails={emails} 
+            type="inbox"
+            selectedEmails={selectedEmails}
+            setSelectedEmails={setSelectedEmails}
+            itemVariants={itemVariants}
+            showAll={showAll}
+          />
+        ) : (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="text-center py-8 text-gray-500"
+          >
+            <p>No emails found</p>
+          </motion.div>
+        )}
       </div>
     </div>
   );
@@ -396,17 +392,12 @@ export default function InboxPage() {
       </motion.div>
       
       <div className="flex-1 overflow-hidden">
-        <Suspense fallback={
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="flex justify-center items-center h-full"
-          >
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
-          </motion.div>
-        }>
-          <InboxEmailList userId={session.user.id} page={page} setPage={setPage} showAll={showAll} />
-        </Suspense>
+        <InboxEmailList 
+          userId={session.user.id} 
+          page={page} 
+          setPage={setPage} 
+          showAll={showAll} 
+        />
       </div>
     </div>
   );

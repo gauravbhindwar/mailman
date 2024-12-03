@@ -55,3 +55,32 @@ export const getCache = (key, refresh = false) => {
 export const clearAllCache = () => {
   return cache.flushAll();
 };
+
+/**
+ * Cache emails with validation
+ */
+export const cacheEmails = (key, emails, ttl = 300) => {
+  if (!Array.isArray(emails)) {
+    console.error('Invalid emails data for caching');
+    return false;
+  }
+
+  const validatedEmails = emails.filter(email => 
+    email && email.id && (email.subject || email.content)
+  );
+
+  return cache.set(key, validatedEmails, ttl);
+};
+
+/**
+ * Get cached emails with refresh option
+ */
+export const getCachedEmails = (key, refresh = false) => {
+  if (refresh) {
+    cache.del(key);
+    return null;
+  }
+  
+  const emails = cache.get(key);
+  return Array.isArray(emails) ? emails : null;
+};
