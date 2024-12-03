@@ -1,56 +1,47 @@
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "../../api/auth/[...nextauth]/authOptions";
-import { sendEmail } from "@/utils/emailService";
+import { NextResponse } from 'next/server';
+import { sendEmail } from '../../../lib/email';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '../auth/[...nextauth]/authOptions';
 
-export async function POST(request) {
+export async function POST(req) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session?.user?.email) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), { 
-        status: 401 
-      });
+
+    if (!session) {
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      );
     }
 
-    const body = await request.json();
+    const body = await req.json();
     const { to, subject, content } = body;
 
     if (!to || !subject || !content) {
-      return new Response(JSON.stringify({ 
-        error: "Missing required fields" 
-      }), { 
-        status: 400 
-      });
+      return NextResponse.json(
+        { error: 'Missing required fields' },
+        { status: 400 }
+      );
     }
 
-    try {
-      const result = await sendEmail({
-        from: {
-          userId: session.user._id || session.user.id, // Try both formats
-          email: session.user.email
-        },
-        to,
-        subject,
-        content
-      });
+    const emailData = {
+      from: {
+        userId: session.user.id,
+        email: session.user.email
+      },
+      to,
+      subject,
+      content
+    };
 
-      return new Response(JSON.stringify({ success: true, data: result }), {
-        status: 200
-      });
-    } catch (error) {
-      console.error('Error sending email:', error);
-      return new Response(JSON.stringify({ 
-        error: error.message || 'Failed to send email',
-        details: error.stack
-      }), {
-        status: error.status || 500
-      });
-    }
+    const email = await sendEmail(emailData);
+    return NextResponse.json({ success: true, email });
+
   } catch (error) {
-    console.error('API Error:', error);
-    return new Response(JSON.stringify({ 
-      error: "Internal server error" 
-    }), { 
-      status: 500 
-    });
+    console.error('Error sending email:', error);
+    return NextResponse.json(
+      { error: error.message || 'Failed to send email' },
+      { status: 500 }
+    );
   }
 }

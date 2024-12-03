@@ -91,91 +91,23 @@ userSchema.pre('save', async function(next) {
   next();
 });
 
-// Add validation for email config
-userSchema.pre('save', function(next) {
-  if (this.isModified('emailConfig')) {
-    // Validate required fields
-    if (this.emailConfig.smtp) {
-      const smtp = this.emailConfig.smtp;
-      if (!smtp.user || !smtp.password || !smtp.host || !smtp.port) {
-        throw new Error('Missing required SMTP configuration');
-      }
-    }
-    
-    if (this.emailConfig.imap) {
-      const imap = this.emailConfig.imap;
-      if (!imap.user || !imap.password || !imap.host || !imap.port) {
-        throw new Error('Missing required IMAP configuration');
-      }
-    }
-  }
-  next();
-});
-
 // Method to compare password
 userSchema.methods.comparePassword = async function(candidatePassword) {
   return await bcrypt.compare(candidatePassword, this.password);
 };
 
-// Update getEmailCredentials method
+// Add method to safely get decrypted credentials
 userSchema.methods.getEmailCredentials = function() {
-  if (!this.emailConfig) {
-    throw new Error('Email configuration not found');
-  }
-
-  const decryptPassword = (encryptedPassword) => {
-    try {
-      return encryptedPassword ? decrypt(encryptedPassword) : null;
-    } catch (error) {
-      console.error('Password decryption failed:', error);
-      return null;
-    }
-  };
-
   return {
     smtp: {
       ...this.emailConfig.smtp,
-      password: decryptPassword(this.emailConfig.smtp?.password)
+      password: this.emailConfig.smtp.password ? decrypt(this.emailConfig.smtp.password) : null
     },
     imap: {
       ...this.emailConfig.imap,
-      password: decryptPassword(this.emailConfig.imap?.password)
+      password: this.emailConfig.imap.password ? decrypt(this.emailConfig.imap.password) : null
     }
   };
-};
-
-// Add method to test email configuration
-userSchema.methods.testEmailConnection = async function() {
-  const credentials = this.getEmailCredentials();
-  
-  // Test IMAP connection
-  const imap = new Imap({
-    user: credentials.imap.user,
-    password: credentials.imap.password,
-    host: credentials.imap.host,
-    port: credentials.imap.port,
-    tls: true,
-    authTimeout: 30000,
-    auth: {
-      user: credentials.imap.user,
-      pass: credentials.imap.password,
-      authMethod: 'PLAIN'
-    }
-  });
-
-  return new Promise((resolve, reject) => {
-    imap.once('ready', () => {
-      imap.end();
-      resolve(true);
-    });
-
-    imap.once('error', (err) => {
-      imap.end();
-      reject(err);
-    });
-
-    imap.connect();
-  });
 };
 
 export default mongoose.models.User || mongoose.model('User', userSchema);

@@ -42,18 +42,6 @@ export default function EmailSetup() {
       smtp: { ...prev.smtp, ...presetProviders[provider].smtp },
       imap: { ...prev.imap, ...presetProviders[provider].imap }
     }));
-
-    // Add Gmail-specific instructions
-    if (provider === 'gmail') {
-      alert(`For Gmail:
-1. Enable 2-Step Verification in your Google Account
-2. Generate an App Password:
-   - Go to Google Account > Security
-   - Under "2-Step Verification", click "App passwords"
-   - Select "Mail" and your device
-   - Use the generated 16-character password
-3. Make sure IMAP is enabled in Gmail settings`);
-    }
   };
 
   const handleConfigChange = (type, field, value) => {
@@ -83,27 +71,16 @@ export default function EmailSetup() {
   const saveConfig = async (e) => {
     e.preventDefault();
     try {
-      const response = await fetch('/api/user/email-config', {
+      const res = await fetch('/api/nodemailer', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          smtp: {
-            ...config.smtp,
-            service: 'gmail' // Add default service
-          },
-          imap: config.imap
-        })
+        body: JSON.stringify(config)
       });
-
-      if (!response.ok) {
-        throw new Error('Failed to save configuration');
+      if (res.ok) {
+        alert('Gmail configuration saved successfully!');
       }
-
-      const data = await response.json();
-      alert('Email configuration saved successfully!');
     } catch (error) {
       console.error('Failed to save config:', error);
-      alert('Failed to save configuration: ' + error.message);
     }
   };
 
