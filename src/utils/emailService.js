@@ -480,9 +480,13 @@ export const fetchEmailsIMAP = async (user, folder = 'inbox', page = 1, limit = 
       const allEmails = [];
       
       imap.once('ready', () => {
-        imap.openBox(folder, false, async (err, box) => {
+        // Use FOLDER_MAPPING to get correct folder path
+        const folderPath = FOLDER_MAPPING[folder.toLowerCase()] || folder;
+        
+        imap.openBox(folderPath, false, async (err, box) => {
           if (err) {
             console.error('Error opening mailbox:', err);
+            console.error('Attempted folder path:', folderPath);
             return reject(err);
           }
 

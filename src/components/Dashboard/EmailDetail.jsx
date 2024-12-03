@@ -5,6 +5,9 @@ import dynamic from 'next/dynamic';
 import { MdReply, MdForward, MdDelete, MdArchive, MdClose } from 'react-icons/md';
 import { formatDistanceToNow } from 'date-fns';
 import { useRouter } from 'next/navigation';
+import { Dialog, Transition } from '@headlessui/react';
+import { Fragment } from 'react';
+import EmailView from './EmailView';
 
 // Dynamic import of the rich text editor
 const RichTextEditor = dynamic(() => import('../RichTextEditor'), { ssr: false });
@@ -129,158 +132,39 @@ const ReplyForm = ({ onSubmit, onCancel, initialContent = '', isForward = false 
 };
 
 export default function EmailDetail({ email, onClose }) {
-  const router = useRouter();
-  const [isReplying, setIsReplying] = useState(false);
-  const [isForwarding, setIsForwarding] = useState(false);
-
-  if (!email) return null;
-
-  // Get sender info first
-  const sender = getSenderInfo();
-
-  // Then use sender info in messages
-  const messages = email?.messages || [{ 
-    content: email?.content || 'No content available',
-    createdAt: email?.date || new Date(),
-    externalSender: sender?.email
-  }];
-
-  const participants = email?.participants || [];
-
-  // Move getSenderInfo function definition before its usage
-  function getSenderInfo() {
-    if (email.from) {
-      return {
-        name: email.from.split('@')[0],
-        email: email.from
-      };
-    }
-    const sender = email.participants?.[0] || { name: 'Unknown', email: 'unknown@example.com' };
-    return {
-      name: sender.name || sender.email?.split('@')[0] || 'Unknown',
-      email: sender.email || 'unknown@example.com'
-    };
-  }
-
-  const getFormattedDate = (dateStr) => {
-    try {
-      return formatDistanceToNow(new Date(dateStr), { addSuffix: true });
-    } catch (error) {
-      return 'Unknown date';
-    }
-  };
-
-  const handleReply = () => {
-    const replyData = {
-      to: email.messages?.[0]?.externalSender || email.participants?.[0]?.email,
-      subject: `Re: ${email.subject}`,
-      content: `\n\nOn ${new Date(email.messages?.[0]?.createdAt).toLocaleString()}, ${email.messages?.[0]?.externalSender || email.participants?.[0]?.email} wrote:\n${email.messages?.[0]?.content?.replace(/(<([^>]+)>)/gi, '') || ''}`
-    };
-    
-    // Use btoa for base64 encoding instead of URI encoding
-    const queryParams = btoa(JSON.stringify(replyData));
-    router.push(`/dashboard/compose?reply=${queryParams}`);
-    onClose();
-  };
-
-  const handleForward = () => {
-    const forwardData = {
-      subject: `Fwd: ${email.subject}`,
-      content: `---------- Forwarded message ----------\n` +
-        `From: ${email.messages?.[0]?.externalSender || email.participants?.[0]?.email}\n` +
-        `Date: ${new Date(email.messages?.[0]?.createdAt).toLocaleString()}\n` +
-        `Subject: ${email.subject}\n\n` +
-        `${email.messages?.[0]?.content?.replace(/(<([^>]+)>)/gi, '') || ''}`
-    };
-    
-    // Use btoa for base64 encoding
-    const queryParams = btoa(JSON.stringify(forwardData));
-    router.push(`/dashboard/compose?forward=${queryParams}`);
-    onClose();
-  };
-
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[100] flex justify-center items-start overflow-y-auto p-4"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <motion.div 
-        variants={modalAnimation}
-        initial="hidden"
-        animate="visible"
-        exit="exit"
-        className="bg-gray-50 rounded-xl shadow-2xl w-full max-w-4xl my-8 overflow-hidden"
-        onClick={e => e.stopPropagation()}
-      >
-        {/* Email Header */}
-        <div className="p-4 border-b bg-white">
-          <div className="flex justify-between items-start mb-4">
-            <h2 className="text-xl font-semibold">{email.subject}</h2>
-            <button onClick={onClose} className="text-gray-500 hover:text-gray-700">
-              <MdClose size={24} />
-            </button>
-          </div>
-          
-          {/* Action Buttons */}
-          <div className="flex gap-2">
-            <button
-              onClick={handleReply}
-              className="flex items-center gap-1 px-3 py-1.5 text-sm rounded hover:bg-gray-100"
+    <Transition appear show={true} as={Fragment}>
+      <Dialog as="div" className="relative z-50" onClose={onClose}>
+        <Transition.Child
+          as={Fragment}
+          enter="ease-out duration-300"
+          enterFrom="opacity-0"
+          enterTo="opacity-100"
+          leave="ease-in duration-200"
+          leaveFrom="opacity-100"
+          leaveTo="opacity-0"
+        >
+          <div className="fixed inset-0 bg-black bg-opacity-25" />
+        </Transition.Child>
+
+        <div className="fixed inset-0 overflow-y-auto">
+          <div className="flex min-h-full items-center justify-center p-4">
+            <Transition.Child
+              as={Fragment}
+              enter="ease-out duration-300"
+              enterFrom="opacity-0 scale-95"
+              enterTo="opacity-100 scale-100"
+              leave="ease-in duration-200"
+              leaveFrom="opacity-100 scale-100"
+              leaveTo="opacity-0 scale-95"
             >
-              <MdReply /> Reply
-            </button>
-            <button
-              onClick={handleForward}
-              className="flex items-center gap-1 px-3 py-1.5 text-sm rounded hover:bg-gray-100"
-            >
-              <MdForward /> Forward
-            </button>
-            <button className="flex items-center gap-1 px-3 py-1.5 text-sm rounded hover:bg-gray-100">
-              <MdArchive /> Archive
-            </button>
-            <button className="flex items-center gap-1 px-3 py-1.5 text-sm rounded hover:bg-gray-100">
-              <MdDelete /> Delete
-            </button>
+              <Dialog.Panel className="w-full max-w-4xl transform overflow-hidden rounded-xl bg-white shadow-xl transition-all">
+                <EmailView email={email} />
+              </Dialog.Panel>
+            </Transition.Child>
           </div>
         </div>
-
-        {/* Message Thread */}
-        <div className="overflow-y-auto max-h-[calc(90vh-200px)]">
-          <MessageThread messages={messages} participants={participants} />
-        </div>
-
-        {/* Reply/Forward Forms */}
-        <AnimatePresence>
-          {isReplying && (
-            <ReplyForm
-              onSubmit={handleReply}
-              onCancel={() => setIsReplying(false)}
-            />
-          )}
-          {isForwarding && (
-            <ReplyForm
-              onSubmit={handleForward}
-              onCancel={() => setIsForwarding(false)}
-              initialContent={`
-                <br/><br/>
-                ---------- Forwarded message ----------<br/>
-                From: ${email.participants[0].name} <${email.participants[0].email}><br/>
-                Date: ${new Date(email.messages[0].createdAt).toLocaleString()}<br/>
-                Subject: ${email.subject}<br/>
-                To: ${email.participants[1].email}<br/>
-                <br/>
-                ${email.messages[0].content}
-              `}
-              isForward={true}
-            />
-          )}
-        </AnimatePresence>
-      </motion.div>
-    </motion.div>
+      </Dialog>
+    </Transition>
   );
 }

@@ -137,7 +137,20 @@ const EmailItem = React.memo(function EmailItem({ email, type, selectedEmails, t
   
   if (!formattedEmail) return null;
 
-  const sender = getSenderInfo(formattedEmail, type);
+  // Modified sender info to handle sent folder
+  const sender = useMemo(() => {
+    if (type === 'sent') {
+      // For sent folder, show recipient info instead of sender
+      const toMatch = formattedEmail.to.match(/^(.*?)?(?:\s*<(.+?)>)?$/);
+      return {
+        name: toMatch ? toMatch[1]?.trim() || toMatch[2]?.split('@')[0] : 'Unknown',
+        email: toMatch ? toMatch[2] || formattedEmail.to : formattedEmail.to,
+        isRecipient: true
+      };
+    }
+    return getSenderInfo(formattedEmail, type);
+  }, [formattedEmail, type]);
+
   const lastMessage = formattedEmail.messages?.[formattedEmail.messages.length - 1] || {};
   const messageDate = formattedEmail.lastMessageAt || formattedEmail.date;
 
@@ -223,7 +236,7 @@ const EmailItem = React.memo(function EmailItem({ email, type, selectedEmails, t
                   className={`font-medium ${!formattedEmail.read ? 'font-semibold' : ''}`}
                   whileHover={{ scale: 1.02 }}
                 >
-                  {sender.name}
+                  {type === 'sent' ? `To: ${sender.name}` : sender.name}
                 </motion.span>
                 <TagBadge tag={getMessageTag(formattedEmail, type)} />
               </div>
@@ -231,7 +244,7 @@ const EmailItem = React.memo(function EmailItem({ email, type, selectedEmails, t
                 className="text-xs text-gray-500"
                 whileHover={{ scale: 1.02 }}
               >
-                {sender.email}
+                {type === 'sent' ? sender.email : formattedEmail.from}
               </motion.span>
             </div>
             <motion.span 
@@ -284,13 +297,13 @@ const generateUniqueKey = (email) => {
   return `${baseId}-${timestamp}-${randomSuffix}`;
 };
 
-const EmailList = ({ emails, type, selectedEmails, setSelectedEmails, itemVariants, showAll }) => {
+const EmailList = ({ emails, type, selectedEmails, setSelectedEmails, itemVariants, showAll, page, limit }) => {
   const [isClient, setIsClient] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(true); // renamed from isLoading
 
   useEffect(() => {
     setIsClient(true);
-    setIsLoading(false);
+    setInitialLoading(false);
   }, []);
 
   const [selectedEmail, setSelectedEmail] = useState(null);
@@ -309,8 +322,27 @@ const EmailList = ({ emails, type, selectedEmails, setSelectedEmails, itemVarian
 
   const handleEmailClick = useCallback((e, email) => {
     e.preventDefault();
+    e.stopPropagation();
     setSelectedEmail(email);
   }, []);
+
+  const handleCloseDetail = useCallback(() => {
+    setSelectedEmail(null);
+  }, []);
+
+  const { data, error, isLoading: fetchLoading, mutate } = useSWR( // renamed isLoading to fetchLoading
+    `/api/emails/${showAll ? 'all' : 'inbox'}?page=${page}&limit=${limit}`,
+    fetcher,
+    {
+      revalidateOnFocus: false,
+      dedupingInterval: 0,
+      suspense: false,
+      keepPreviousData: true,
+      onError: (err) => {
+        console.error('Fetch error:', err);
+      }
+    }
+  );
 
   const formattedEmails = useMemo(() => 
     (emails || [])
@@ -340,7 +372,7 @@ const EmailList = ({ emails, type, selectedEmails, setSelectedEmails, itemVarian
   }, [formattedEmails, type, selectedEmails, toggleEmailSelection, toggleStar, itemVariants, handleEmailClick, showAll]);
 
   // Show loading state
-  if (isLoading) {
+  if (initialLoading || fetchLoading) {
     return (
       <motion.div
         initial={{ opacity: 0 }}
@@ -395,45 +427,47 @@ const EmailList = ({ emails, type, selectedEmails, setSelectedEmails, itemVarian
 
   // Render virtualized list on client
   return (
-    <div className="relative w-full h-[calc(100vh-200px)]"> {/* Fixed height container */}
-      <div className="absolute inset-0">
-        <AutoSizer>
-          {({ height, width }) => (
-            <List
-              height={height}
-              width={width}
-              itemCount={formattedEmails.length}
-              itemSize={100} // Increased item size for better visibility
-              overscanCount={5}
-              className="divide-y divide-gray-100"
-            >
-              {({ index, style }) => (
-                <div style={{ ...style, width: '100%' }}>
-                  <EmailItem
-                    key={generateUniqueKey(formattedEmails[index])}
-                    email={formattedEmails[index]}
-                    type={type}
-                    selectedEmails={selectedEmails}
-                    toggleEmailSelection={toggleEmailSelection}
-                    toggleStar={toggleStar}
-                    itemVariants={itemVariants}
-                    onClick={handleEmailClick}
-                    showAll={showAll}
-                  />
-                </div>
-              )}
-            </List>
-          )}
-        </AutoSizer>
-      </div>
+    <>
+      <div className="relative w-full h-[calc(100vh-200px)]"> {/* Fixed height container */}
+        <div className="absolute inset-0">
+          <AutoSizer>
+            {({ height, width }) => (
+              <List
+                height={height}
+                width={width}
+                itemCount={formattedEmails.length}
+                itemSize={100} // Increased item size for better visibility
+                overscanCount={5}
+                className="divide-y divide-gray-100"
+              >
+                {({ index, style }) => (
+                  <div style={{ ...style, width: '100%' }}>
+                    <EmailItem
+                      key={generateUniqueKey(formattedEmails[index])}
+                      email={formattedEmails[index]}
+                      type={type}
+                      selectedEmails={selectedEmails}
+                      toggleEmailSelection={toggleEmailSelection}
+                      toggleStar={toggleStar}
+                      itemVariants={itemVariants}
+                      onClick={handleEmailClick}
+                      showAll={showAll}
+                    />
+                  </div>
+                )}
+              </List>
+            )}
+          </AutoSizer>
+        </div>
 
-      {selectedEmail && (
-        <EmailDetail 
-          email={selectedEmail}
-          onClose={() => setSelectedEmail(null)}
-        />
-      )}
-    </div>
+        {selectedEmail && (
+          <EmailDetail 
+            email={selectedEmail}
+            onClose={handleCloseDetail}
+          />
+        )}
+      </div>
+    </>
   );
 };
 
