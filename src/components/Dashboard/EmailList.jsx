@@ -1,9 +1,22 @@
-import { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+"use client"
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import dynamic from 'next/dynamic';
+import { motion } from 'framer-motion';
 import Link from 'next/link';
 import { MdStar, MdStarBorder, MdCheckBox, MdCheckBoxOutlineBlank, MdArchive, MdDelete } from 'react-icons/md';
 import { formatDistanceToNow } from 'date-fns';
 import EmailDetail from './EmailDetail';
+import useSWR from 'swr';
+import { FixedSizeList as List } from 'react-window';
+import AutoSizer from 'react-virtualized-auto-sizer';
+
+// Remove VirtualScroll dynamic import
+
+const fetcher = async (url) => {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('Failed to fetch');
+  return res.json();
+};
 
 // Helper functions
 const getInitials = (name) => {
@@ -25,19 +38,27 @@ const getRandomColor = (str) => {
 };
 
 const getSenderInfo = (email, type) => {
-  if (!email) return { name: 'Unknown', email: 'unknown@example.com' };
+  if (!email) return { name: 'Unknown', email: '' };
 
-  if (type === 'inbox') {
-    if (email.messages?.[0]?.externalSender) {
-      const sender = email.messages[0].externalSender;
-      return {
-        name: sender.split('@')[0],
-        email: sender
-      };
-    }
-    return email.participants?.[0] || { name: 'Unknown', email: 'unknown@example.com' };
+  // Parse complex email format (Name <email@domain.com>)
+  const emailRegex = /^(.*?)?(?:\s*<(.+?)>)?$/;
+  const fromField = email.from || '';
+  const matches = fromField.match(emailRegex);
+
+  if (matches) {
+    const [_, name, emailAddr] = matches;
+    return {
+      name: name?.trim().replace(/["']/g, '') || emailAddr?.split('@')?.[0] || 'Unknown',
+      email: emailAddr || fromField || ''
+    };
   }
-  return email.participants?.[1] || { name: email.toEmail, email: email.toEmail };
+
+  // Fallback for simple email addresses
+  const emailParts = fromField.split('@');
+  return {
+    name: emailParts[0] || 'Unknown',
+    email: fromField || ''
+  };
 };
 
 const listAnimation = {
@@ -55,20 +76,97 @@ const itemAnimation = {
   show: { opacity: 1, x: 0 }
 };
 
-const EmailItem = ({ email, type, selectedEmails, toggleEmailSelection, toggleStar, itemVariants, onClick }) => {
-  const sender = getSenderInfo(email, type);
-  const lastMessage = email.messages?.[email.messages.length - 1] || {};
+const getMessageTag = (email, type) => {
+  if (email.status) return email.status;
+  if (type === 'inbox' && email.messages?.[0]?.externalSender) return 'received';
+  if (type === 'sent') return 'sent';
+  if (email.flags?.includes('\\Draft')) return 'draft';
+  if (email.labels?.includes('\\Spam')) return 'spam';
+  if (email.labels?.includes('\\Trash')) return 'trash';
+  if (email.labels?.includes('\\Starred')) return 'starred';
+  return 'inbox';
+};
 
-  // Get preview text without HTML tags
-  const getPreviewText = (content) => {
-    const div = document.createElement('div');
-    div.innerHTML = content || '';
-    return div.textContent?.substring(0, 60) || 'No content';
+const TagBadge = ({ tag }) => {
+  const tagColors = {
+    received: 'bg-blue-100 text-blue-800 border border-blue-200',
+    sent: 'bg-green-100 text-green-800 border border-green-200',
+    draft: 'bg-yellow-100 text-yellow-800 border border-yellow-200',
+    spam: 'bg-red-100 text-red-800 border border-red-200',
+    trash: 'bg-gray-100 text-gray-800 border border-gray-200',
+    starred: 'bg-purple-100 text-purple-800 border border-purple-200',
+    inbox: 'bg-indigo-100 text-indigo-800 border border-indigo-200',
+    archived: 'bg-gray-100 text-gray-800 border border-gray-200'
   };
 
+  return (
+    <span className={`text-xs px-2 py-0.5 rounded-full ${tagColors[tag] || tagColors.inbox}`}>
+      {tag.charAt(0).toUpperCase() + tag.slice(1)}
+    </span>
+  );
+};
+
+const getPreviewText = (content) => {
+  if (!content) return 'No message content';
+  
+  const div = document.createElement('div');
+  div.innerHTML = content;
+  const text = div.textContent || div.innerText || '';
+  return text.trim().substring(0, 60) + (text.length > 60 ? '...' : '');
+};
+
+const formatEmail = (email) => {
+  if (!email) return null;
+  
+  return {
+    id: email.id || email.uid || email.messageId,
+    from: email.from || 'Unknown Sender',
+    to: email.to || '',
+    subject: email.subject || '(No Subject)',
+    content: email.content || '',
+    date: email.date ? new Date(email.date) : new Date(),
+    read: email.read || false,
+    starred: email.starred || false,
+    labels: email.labels || [],
+    folder: email.folder || 'inbox'
+  };
+};
+
+const EmailItem = React.memo(function EmailItem({ email, type, selectedEmails, toggleEmailSelection, toggleStar, itemVariants, onClick, showAll }) {
+  const formattedEmail = formatEmail(email);
+  
+  if (!formattedEmail) return null;
+
+  // Modified sender info to handle sent folder
+  const sender = useMemo(() => {
+    if (type === 'sent') {
+      // For sent folder, show recipient info instead of sender
+      const toMatch = formattedEmail.to.match(/^(.*?)?(?:\s*<(.+?)>)?$/);
+      return {
+        name: toMatch ? toMatch[1]?.trim() || toMatch[2]?.split('@')[0] : 'Unknown',
+        email: toMatch ? toMatch[2] || formattedEmail.to : formattedEmail.to,
+        isRecipient: true
+      };
+    }
+    return getSenderInfo(formattedEmail, type);
+  }, [formattedEmail, type]);
+
+  const lastMessage = formattedEmail.messages?.[formattedEmail.messages.length - 1] || {};
+  const messageDate = formattedEmail.lastMessageAt || formattedEmail.date;
+
+  // Safe date formatting
+  const getFormattedDate = (dateStr) => {
+    try {
+      return formatDistanceToNow(new Date(dateStr), { addSuffix: true });
+    } catch (error) {
+      return 'Invalid date';
+    }
+  };
+
+  // Get preview text without HTML tags
   const handleClick = (e) => {
     e.preventDefault(); // Prevent Link navigation
-    onClick(e, email);
+    onClick(e, formattedEmail);
   };
 
   return (
@@ -79,21 +177,21 @@ const EmailItem = ({ email, type, selectedEmails, toggleEmailSelection, toggleSt
         backgroundColor: 'rgba(242, 245, 245, 0.8)',
         transition: { duration: 0.2 }
       }}
-      className={`group relative ${!email.read ? 'bg-blue-50' : 'bg-white'} border-b border-gray-100`}
+      className={`group relative ${!formattedEmail.read ? 'bg-blue-50' : 'bg-white'} border-b border-gray-100`}
     >
-      <div className="flex items-center p-4 cursor-pointer" onClick={(e) => handleClick(e, email)}>
+      <div className="flex items-center p-4 cursor-pointer" onClick={handleClick}>
         <div className="flex items-center space-x-2 min-w-[80px]">
           {/* Selection and Star buttons */}
           <motion.button
             onClick={(e) => {
               e.stopPropagation();
-              toggleEmailSelection(email.id, e);
+              toggleEmailSelection(formattedEmail.id, e);
             }}
             whileHover={{ scale: 1.1 }}
             whileTap={{ scale: 0.9 }}
             className="text-gray-400 hover:text-gray-600"
           >
-            {selectedEmails.includes(email.id) ? (
+            {selectedEmails.includes(formattedEmail.id) ? (
               <MdCheckBox className="w-5 h-5" />
             ) : (
               <MdCheckBoxOutlineBlank className="w-5 h-5" />
@@ -102,13 +200,13 @@ const EmailItem = ({ email, type, selectedEmails, toggleEmailSelection, toggleSt
           <motion.button
             onClick={(e) => {
               e.stopPropagation();
-              toggleStar(email.id, e);
+              toggleStar(formattedEmail.id, e);
             }}
             whileHover={{ scale: 1.1 }}
             whileTap={{ scale: 0.9 }}
             className="text-gray-400 hover:text-yellow-400"
           >
-            {email.starred ? (
+            {formattedEmail.starred ? (
               <MdStar className="w-5 h-5 text-yellow-400" />
             ) : (
               <MdStarBorder className="w-5 h-5" />
@@ -132,24 +230,37 @@ const EmailItem = ({ email, type, selectedEmails, toggleEmailSelection, toggleSt
         {/* Email Content with improved layout */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-2">
+                <motion.span 
+                  className={`font-medium ${!formattedEmail.read ? 'font-semibold' : ''}`}
+                  whileHover={{ scale: 1.02 }}
+                >
+                  {type === 'sent' ? `To: ${sender.name}` : sender.name}
+                </motion.span>
+                <TagBadge tag={getMessageTag(formattedEmail, type)} />
+              </div>
+              <motion.span 
+                className="text-xs text-gray-500"
+                whileHover={{ scale: 1.02 }}
+              >
+                {type === 'sent' ? sender.email : formattedEmail.from}
+              </motion.span>
+            </div>
             <motion.span 
-              className={`font-medium ${!email.read ? 'font-semibold' : ''}`}
+              className="text-sm text-gray-500 ml-2 whitespace-nowrap"
               whileHover={{ scale: 1.02 }}
             >
-              {sender.name}
-            </motion.span>
-            <motion.span 
-              className="text-sm text-gray-500"
-              whileHover={{ scale: 1.02 }}
-            >
-              {formatDistanceToNow(new Date(email.lastMessageAt), { addSuffix: true })}
+              {messageDate ? getFormattedDate(messageDate) : 'Unknown date'}
             </motion.span>
           </div>
-          <h3 className="text-sm font-medium text-gray-800 mb-1">
-            {email.subject}
+          <h3 className="text-sm font-medium text-gray-800 mb-1 truncate">
+            {formattedEmail.subject || '(No Subject)'}
           </h3>
-          <p className="text-sm text-gray-500 truncate">
-            {getPreviewText(lastMessage.content)}...
+          <p className="text-sm text-gray-500 line-clamp-2 overflow-hidden">
+            {formattedEmail.messages?.[0]?.content ? 
+              getPreviewText(formattedEmail.messages[0].content) : 
+              getPreviewText(formattedEmail.content)}
           </p>
         </div>
 
@@ -177,29 +288,103 @@ const EmailItem = ({ email, type, selectedEmails, toggleEmailSelection, toggleSt
       </div>
     </motion.div>
   );
+});
+
+const generateUniqueKey = (email) => {
+  const baseId = email.id || email.messageId || email.uid;
+  const timestamp = email.date || email.lastMessageAt || Date.now();
+  const randomSuffix = Math.random().toString(36).substring(7);
+  return `${baseId}-${timestamp}-${randomSuffix}`;
 };
 
-const EmailList = ({ emails, type, selectedEmails = [], setSelectedEmails = () => {}, itemVariants }) => {
+const EmailList = ({ emails = [], type, selectedEmails = [], setSelectedEmails, itemVariants, showAll, page, limit }) => {
+  const [isClient, setIsClient] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true); // renamed from isLoading
+
+  useEffect(() => {
+    setIsClient(true);
+    setInitialLoading(false);
+  }, []);
+
   const [selectedEmail, setSelectedEmail] = useState(null);
   
-  const toggleEmailSelection = (emailId, e) => {
+  const toggleEmailSelection = useCallback((emailId, e) => {
     e.preventDefault();
     setSelectedEmails(prev => 
       prev.includes(emailId) ? prev.filter(id => id !== emailId) : [...prev, emailId]
     );
-  };
+  }, [setSelectedEmails]);
 
-  const toggleStar = async (emailId, e) => {
+  const toggleStar = useCallback(async (emailId, e) => {
     e.preventDefault();
     // Implement star toggle functionality
-  };
+  }, []);
 
-  const handleEmailClick = (e, email) => {
+  const handleEmailClick = useCallback((e, email) => {
     e.preventDefault();
+    e.stopPropagation();
     setSelectedEmail(email);
-  };
+  }, []);
 
-  if (!emails?.length) {
+  const handleCloseDetail = useCallback(() => {
+    setSelectedEmail(null);
+  }, []);
+
+  const { data, error, isLoading: fetchLoading, mutate } = useSWR( // renamed isLoading to fetchLoading
+    `/api/emails/${showAll ? 'all' : 'inbox'}?page=${page}&limit=${limit}`,
+    fetcher,
+    {
+      revalidateOnFocus: false,
+      dedupingInterval: 0,
+      suspense: false,
+      keepPreviousData: true,
+      onError: (err) => {
+        console.error('Fetch error:', err);
+      }
+    }
+  );
+
+  const formattedEmails = useMemo(() => 
+    (Array.isArray(emails) ? emails : [])
+      .map(formatEmail)
+      .filter(Boolean)
+      .sort((a, b) => new Date(b.date) - new Date(a.date)),
+    [emails]
+  );
+
+  const renderEmailItem = useCallback(({ index, style }) => {
+    const email = formattedEmails[index];
+    return (
+      <div style={style}>
+        <EmailItem
+          key={generateUniqueKey(email)}
+          email={email}
+          type={type}
+          selectedEmails={selectedEmails}
+          toggleEmailSelection={toggleEmailSelection}
+          toggleStar={toggleStar}
+          itemVariants={itemVariants}
+          onClick={handleEmailClick}
+          showAll={showAll}
+        />
+      </div>
+    );
+  }, [formattedEmails, type, selectedEmails, toggleEmailSelection, toggleStar, itemVariants, handleEmailClick, showAll]);
+
+  // Show loading state
+  if (initialLoading || fetchLoading) {
+    return (
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        className="flex justify-center items-center h-64"
+      >
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+      </motion.div>
+    );
+  }
+
+  if (!Array.isArray(emails) || emails.length === 0) {
     return (
       <motion.div
         initial={{ opacity: 0 }}
@@ -212,36 +397,78 @@ const EmailList = ({ emails, type, selectedEmails = [], setSelectedEmails = () =
     );
   }
 
-  return (
-    <div className="relative w-full">
-      <motion.div 
-        variants={listAnimation}
-        initial="hidden"
-        animate="show"
-        className="divide-y divide-gray-100"
-      >
-        {emails?.map((email) => (
-          <EmailItem
-            key={email.id}
-            email={email}
-            type={type}
-            selectedEmails={selectedEmails}
-            toggleEmailSelection={toggleEmailSelection}
-            toggleStar={toggleStar}
-            itemVariants={itemVariants}
-            onClick={handleEmailClick}
-          />
-        ))}
-      </motion.div>
+  // Render regular list during SSR
+  if (!isClient) {
+    return (
+      <div className="relative w-full">
+        <motion.div
+          variants={listAnimation}
+          initial="hidden"
+          animate="show"
+          className="divide-y divide-gray-100"
+        >
+          {formattedEmails.slice(0, 10).map((email) => (
+            <EmailItem
+              key={generateUniqueKey(email)}
+              email={email}
+              type={type}
+              selectedEmails={selectedEmails}
+              toggleEmailSelection={toggleEmailSelection}
+              toggleStar={toggleStar}
+              itemVariants={itemVariants}
+              onClick={handleEmailClick}
+              showAll={showAll}
+            />
+          ))}
+        </motion.div>
+      </div>
+    );
+  }
 
-      {selectedEmail && (
-        <EmailDetail 
-          email={selectedEmail}
-          onClose={() => setSelectedEmail(null)}
-        />
-      )}
-    </div>
+  // Render virtualized list on client
+  return (
+    <>
+      <div className="relative w-full h-[calc(100vh-200px)]"> {/* Fixed height container */}
+        <div className="absolute inset-0">
+          <AutoSizer>
+            {({ height, width }) => (
+              <List
+                height={height}
+                width={width}
+                itemCount={formattedEmails.length}
+                itemSize={100} // Increased item size for better visibility
+                overscanCount={5}
+                className="divide-y divide-gray-100"
+              >
+                {({ index, style }) => (
+                  <div style={{ ...style, width: '100%' }}>
+                    <EmailItem
+                      key={generateUniqueKey(formattedEmails[index])}
+                      email={formattedEmails[index]}
+                      type={type}
+                      selectedEmails={selectedEmails}
+                      toggleEmailSelection={toggleEmailSelection}
+                      toggleStar={toggleStar}
+                      itemVariants={itemVariants}
+                      onClick={handleEmailClick}
+                      showAll={showAll}
+                    />
+                  </div>
+                )}
+              </List>
+            )}
+          </AutoSizer>
+        </div>
+
+        {selectedEmail && (
+          <EmailDetail 
+            email={selectedEmail}
+            onClose={handleCloseDetail}
+          />
+        )}
+      </div>
+    </>
   );
 };
 
-export default EmailList;
+export default React.memo(EmailList);

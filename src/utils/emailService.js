@@ -9,8 +9,7 @@ import { connect } from '../lib/dbConfig';
 import { generateConversationId } from './emailUtils';
 import NodeCache from 'node-cache';
 import { cache, getCacheKey } from './cache';
-
-const ITEMS_PER_PAGE = 20;
+import { validateSMTPConfig } from './email-config';
 
 // Remove the local emailCache declaration since we're using the shared one
 
@@ -30,6 +29,38 @@ const GMAIL_IMAP_CONFIG = {
   tlsOptions: { rejectUnauthorized: false }
 };
 
+const SPECIAL_USE_ATTRIBUTES = {
+  '\\All': 'all',
+  '\\Drafts': 'drafts',
+  '\\Important': 'important',
+  '\\Sent': 'sent',
+  '\\Junk': 'spam',
+  '\\Flagged': 'starred',
+  '\\Trash': 'trash'
+};
+
+const getFolderMapping = (boxes) => {
+  const mapping = {};
+  const traverseBoxes = (box, path = '') => {
+    Object.keys(box).forEach((key) => {
+      const fullPath = path ? `${path}/${key}` : key;
+      const boxInfo = box[key];
+      if (boxInfo.children) {
+        traverseBoxes(boxInfo.children, fullPath);
+      } else {
+        const attributes = boxInfo.attribs || [];
+        attributes.forEach((attr) => {
+          if (SPECIAL_USE_ATTRIBUTES[attr]) {
+            mapping[SPECIAL_USE_ATTRIBUTES[attr]] = fullPath;
+          }
+        });
+      }
+    });
+  };
+  traverseBoxes(boxes);
+  return mapping;
+};
+
 // Email validation
 const validateEmail = (email) => {
   const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -38,18 +69,33 @@ const validateEmail = (email) => {
 
 // Create dynamic SMTP transporter with Gmail defaults
 const createSMTPTransport = (userConfig) => {
-  return nodemailer.createTransport({
-    host: userConfig.smtp?.host || process.env.EMAIL_HOST,
-    port: parseInt(userConfig.smtp?.port) || parseInt(process.env.EMAIL_PORT),
-    secure: userConfig.smtp?.secure || false,
+  validateSMTPConfig(userConfig);
+  const { host, port, user, password, secure = true, requireTLS = true } = userConfig.smtp;
+
+  const transportConfig = {
+    host,
+    port: parseInt(port),
+    secure, // Use secure for port 465, false for other ports
     auth: {
-      user: userConfig.smtp?.user || process.env.EMAIL_USER,
-      pass: userConfig.smtp?.password || process.env.EMAIL_PASS,
+      user,
+      pass: password,
     },
+    requireTLS,
     tls: {
       rejectUnauthorized: false,
+      minVersion: 'TLSv1.2'
     },
-  });
+    debug: process.env.NODE_ENV === 'development',
+    logger: process.env.NODE_ENV === 'development',
+  };
+
+  // Special handling for different ports
+  if (port === 587) {
+    transportConfig.secure = false;
+    transportConfig.requireTLS = true;
+  }
+
+  return nodemailer.createTransport(transportConfig);
 };
 
 // Create SMTP transporter for verification emails
@@ -66,16 +112,48 @@ const createVerificationTransport = () => {
   });
 };
 
-// Send email using Gmail SMTP configuration
+// Send email using SMTP configuration
 export const sendEmailSMTP = async ({ from, to, subject, content, attachments = [], userConfig }) => {
+  if (!userConfig?.smtp) {
+    throw new Error('SMTP configuration is missing. Please configure your email settings.');
+  }
+
+  const { host, port, user, password } = userConfig.smtp;
+  
+  if (!host || !port || !user || !password) {
+    const missing = [];
+    if (!host) missing.push('SMTP Host');
+    if (!port) missing.push('SMTP Port');
+    if (!user) missing.push('SMTP Username');
+    if (!password) missing.push('SMTP Password');
+    throw new Error(`Incomplete SMTP configuration. Missing: ${missing.join(', ')}`);
+  }
+
   try {
     await connect();
     
     const transporter = createSMTPTransport(userConfig);
-    await transporter.verify();
+    
+    // Verify SMTP connection with detailed error handling
+    try {
+      await transporter.verify();
+    } catch (verifyError) {
+      console.error('SMTP Verification Error:', {
+        error: verifyError,
+        config: {
+          host: userConfig.smtp.host,
+          port: userConfig.smtp.port,
+          secure: userConfig.smtp.secure,
+          user: userConfig.smtp.user
+        }
+      });
+      throw new Error(
+        `SMTP connection failed: ${verifyError.message}. Please check your email settings.`
+      );
+    }
 
     const mailOptions = {
-      from: userConfig.smtp?.user || process.env.EMAIL_USER,
+      from: userConfig.smtp.user, // Use configured SMTP user as sender
       to,
       subject,
       html: content,
@@ -83,10 +161,33 @@ export const sendEmailSMTP = async ({ from, to, subject, content, attachments = 
     };
 
     const info = await transporter.sendMail(mailOptions);
-    return info;
+    return {
+      success: true,
+      messageId: info.messageId,
+      response: info.response,
+    };
   } catch (error) {
-    console.error('SMTP Error:', error);
-    throw new Error('Failed to send email via SMTP');
+    console.error('SMTP Error Details:', {
+      code: error.code,
+      command: error.command,
+      response: error.response,
+      responseCode: error.responseCode,
+      message: error.message,
+      stack: error.stack
+    });
+    
+    let errorMessage;
+    if (error.message.includes('SMTP configuration')) {
+      errorMessage = error.message;
+    } else if (error.code === 'EAUTH') {
+      errorMessage = 'SMTP authentication failed - check your credentials';
+    } else if (error.code === 'ESOCKET') {
+      errorMessage = 'Could not connect to SMTP server';
+    } else {
+      errorMessage = `Failed to send email: ${error.message}`;
+    }
+    
+    throw new Error(errorMessage);
   }
 };
 
@@ -141,246 +242,400 @@ export const fetchAndStoreExternalEmails = async (userId) => {
     const user = await User.findById(userId)
       .select('+emailConfig.smtp.password +emailConfig.imap.password');
     
-    if (!user?.emailConfig?.imap?.host || !user?.emailConfig?.smtp?.host) {
+    if (!user?.emailConfig?.imap?.host) {
       console.log('Email not configured for user:', userId);
-      return { 
-        success: false, 
-        emails: [],
-        error: 'EMAIL_NOT_CONFIGURED'
-      };
+      return { success: false, error: 'EMAIL_NOT_CONFIGURED' };
     }
 
+    console.log('📥 Fetching emails from IMAP server...');
     const emails = await fetchEmailsIMAP(user);
-    console.log(`✅ Fetched ${emails.length} emails for user:`, user.email);
-
-    // Bulk create conversations and messages
-    const operations = emails.map(async (email) => {
-      try {
-        const conversationId = generateConversationId(
-          email.from || 'unknown',
-          user.email,
-          email.subject || 'No Subject'
-        );
-
-        return {
-          updateOne: {
-            filter: { conversationId },
-            update: {
-              $setOnInsert: {
-                conversationId,
-                participants: [user._id],
-                subject: email.subject || 'No Subject',
-                status: 'inbox',
-                toEmail: user.email
-              },
-              $addToSet: {
-                messages: {
-                  $each: [{
-                    externalSender: email.from,
-                    content: email.content || 'No content',
-                    createdAt: email.date || new Date(),
-                    attachments: email.attachments || [],
-                    externalId: email.messageId,
-                    read: false
-                  }]
-                }
-              },
-              $set: { 
-                lastMessageAt: email.date || new Date()
-              }
-            },
-            upsert: true
-          }
-        };
-      } catch (error) {
-        console.error('Error processing email:', error);
-        return null;
-      }
-    });
-
-    const bulkOperations = (await Promise.all(operations)).filter(Boolean);
-    if (bulkOperations.length > 0) {
-      await Email.bulkWrite(bulkOperations);
-    }
+    console.log(`✅ Fetched ${emails.length} emails from IMAP`);
 
     return { success: true, emails };
   } catch (error) {
-    console.error('❌ Error in fetchAndStoreExternalEmails:', error);
+    console.error('❌ Error in fetchEmailsIMAP:', error);
+    throw error;
+  }
+};
+
+const formatEmailAddress = (addr) => {
+  if (!addr) return '';
+  if (typeof addr === 'string') return addr;
+  const { text, value } = addr;
+  if (Array.isArray(value)) {
+    return value.map(v => v.address).join(', ');
+  }
+  return text || '';
+};
+
+const processMessage = async (rawEmail, attrs = {}) => {
+  try {
+    const parsed = await simpleParser(rawEmail);
+    const envelope = attrs.envelope || {};
+    
+    // Extract sender details with better fallbacks
+    const fromEnvelope = envelope.from?.[0] || {};
+    const fromHeader = parsed.from?.value?.[0] || {};
+    
+    // Build sender information
+    const senderName = fromEnvelope.name || 
+                      fromHeader.name || 
+                      parsed.from?.text?.split('<')[0]?.trim() || 
+                      fromEnvelope.mailbox || 
+                      '';
+                      
+    const senderEmail = fromEnvelope.mailbox && fromEnvelope.host ? 
+      `${fromEnvelope.mailbox}@${fromEnvelope.host}` : 
+      fromHeader.address || 
+      parsed.from?.text?.match(/<(.+)>/)?.[1] || 
+      '';
+
+    // Extract recipient details
+    const toEnvelope = envelope.to?.[0] || {};
+    const toHeader = parsed.to?.value?.[0] || {};
+    
+    const recipientName = toEnvelope.name || toHeader.name || '';
+    const recipientEmail = toEnvelope.mailbox && toEnvelope.host ? 
+      `${toEnvelope.mailbox}@${toEnvelope.host}` : 
+      toHeader.address || '';
+
+    // Format sender/recipient strings
+    const from = senderName ? `${senderName} <${senderEmail}>` : senderEmail;
+    const to = recipientName ? `${recipientName} <${recipientEmail}>` : recipientEmail;
+
+    return {
+      // ...existing code...
+      from,
+      fromDetails: {
+        name: senderName.replace(/["']/g, '').trim(),
+        email: senderEmail,
+        raw: from,
+        mailbox: fromEnvelope.mailbox || '',
+        host: fromEnvelope.host || '',
+        displayName: senderName || senderEmail.split('@')[0] || 'Unknown'
+      },
+      to,
+      toDetails: {
+        name: recipientName.replace(/["']/g, '').trim(),
+        email: recipientEmail,
+        raw: to,
+        mailbox: toEnvelope.mailbox || '',
+        host: toEnvelope.host || ''
+      },
+      // ...existing code...
+    };
+  } catch (error) {
+    // ...existing code...
+  }
+};
+
+// Add retry utility at module level
+const retryWithDelay = async (fn, retries = MAX_RETRIES, delay = 1000) => {
+  try {
+    return await fn();
+  } catch (error) {
+    if (retries > 0) {
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return retryWithDelay(fn, retries - 1, delay * 2);
+    }
     throw error;
   }
 };
 
 // Update IMAP configuration to handle connection issues
-export const fetchEmailsIMAP = async (user) => {
-  // Log beginning of IMAP fetch
-  console.log('📥 Starting IMAP fetch for user:', user.email);
-
-  const retryWithDelay = async (fn, retries = MAX_RETRIES, delay = 1000) => {
-    try {
-      return await fn();
-    } catch (error) {
-      if (retries > 0) {
-        await new Promise(resolve => setTimeout(resolve, delay));
-        return retryWithDelay(fn, retries - 1, delay * 2);
-      }
-      throw error;
-    }
-  };
-
-  const credentials = user.getEmailCredentials();
-  
-  // Debug log IMAP configuration (without sensitive data)
-  console.log('🔑 IMAP Configuration:', {
-    host: credentials?.imap?.host,
-    port: credentials?.imap?.port,
-    user: credentials?.imap?.user,
-    hasPassword: !!credentials?.imap?.password,
-    isGmail: credentials?.imap?.user?.toLowerCase().endsWith('@gmail.com')
-  });
-
-  // Enhanced credentials validation
-  const missingFields = [];
-  if (!credentials?.imap?.host) missingFields.push('IMAP Host');
-  if (!credentials?.imap?.port) missingFields.push('IMAP Port');
-  if (!credentials?.imap?.user) missingFields.push('Username');
-  if (!credentials?.imap?.password) missingFields.push('Password');
-
-  if (missingFields.length > 0) {
-    throw new Error(
-      `Email configuration incomplete. Missing: ${missingFields.join(', ')}`
-    );
+const FOLDER_MAPPING = {
+  'inbox': 'INBOX',
+  'sent': '[Gmail]/Sent Mail',
+  'drafts': '[Gmail]/Drafts',
+  'spam': '[Gmail]/Spam',
+  'trash': '[Gmail]/Trash',
+  'archive': '[Gmail]/All Mail',
+  'starred': '[Gmail]/Starred',
+  'all': '[Gmail]/All Mail', // Add this line
+  // Add mappings for other email providers
+  'hotmail': {
+    'sent': 'Sent',
+    'spam': 'Junk',
+    'trash': 'Deleted',
+    'archive': 'Archive'
+  },
+  'yahoo': {
+    'sent': 'Sent',
+    'spam': 'Bulk Mail',
+    'trash': 'Trash',
+    'archive': 'Archive'
   }
+};
 
-  // Configure based on email provider
-  const isGmail = credentials.imap.user.toLowerCase().endsWith('@gmail.com');
-  const imapConfig = {
-    user: credentials.imap.user,
-    password: credentials.imap.password,
-    ...(isGmail ? GMAIL_IMAP_CONFIG : {
-      host: credentials.imap.host,
-      port: credentials.imap.port || 993,
-      tls: true,
-      tlsOptions: { 
-        rejectUnauthorized: false,
-        servername: credentials.imap.host
-      }
-    }),
-    debug: process.env.NODE_ENV === 'development' ? console.log : null,
-    authTimeout: 10000,
-    connTimeout: 10000
-  };
+// Add connection pooling configuration
+const CONNECTION_POOL_SIZE = 5;
+const CONNECTION_TIMEOUT = 1000 * 60 * 5; // 5 minutes
 
-  // Check connection pool
-  const poolKey = `${user._id}:${Date.now()}`;
-  if (imapConnectionPool.has(poolKey)) {
-    return imapConnectionPool.get(poolKey);
-  }
-
-  const fetchEmails = () => new Promise((resolve, reject) => {
-    const imap = new Imap(imapConfig);
-    const emails = [];
-
-    const processMessage = async (stream) => {
-      try {
-        const parsed = await simpleParser(stream);
-        emails.push({
-          messageId: parsed.messageId,
-          from: parsed.from.text,
-          to: parsed.to.text,
-          subject: parsed.subject || '(No Subject)',
-          content: parsed.html || parsed.textAsHtml || parsed.text,
-          attachments: parsed.attachments,
-          date: parsed.date
-        });
-      } catch (error) {
-        console.error('Error parsing message:', error);
-      }
-    };
-
-    imap.once('ready', () => {
-      console.log('IMAP connection established successfully');
-      imap.openBox('INBOX', false, (err, box) => {
-        if (err) {
-          imap.end();
-          return reject(err);
-        }
-
-        // Fetch last 50 messages
-        const fetch = imap.seq.fetch(`${Math.max(1, box.messages.total - 49)}:*`, {
-          bodies: '',
-          struct: true
-        });
-
-        fetch.on('message', (msg) => {
-          msg.on('body', (stream) => {
-            processMessage(stream);
-          });
-        });
-
-        fetch.once('error', (err) => {
-          console.error('Fetch error:', err);
-          imap.end();
-          reject(err);
-        });
-
-        fetch.once('end', () => {
-          imap.end();
-          resolve(emails);
-        });
-      });
-    });
-
-    imap.once('error', (err) => {
-      console.error('IMAP error:', {
-        message: err.message,
-        source: err.source,
-        type: err.type,
-        code: err.code
-      });
-      reject(err);
-    });
-
-    imap.once('end', () => {
-      console.log('IMAP connection ended');
-    });
-
-    try {
-      imap.connect();
-    } catch (err) {
-      console.error('IMAP connect error:', err);
-      reject(err);
-    }
-  });
-
+// Optimize IMAP connection pooling
+const getImapConnection = async (userConfig) => {
   try {
-    const emails = await retryWithDelay(() => fetchEmails());
-    imapConnectionPool.set(poolKey, emails);
-    
-    // Cleanup pool after 5 minutes
-    setTimeout(() => imapConnectionPool.delete(poolKey), 300000);
-    
-    return emails;
-  } catch (error) {
-    if (error.source === 'authentication') {
-      throw new Error('Unable to login - please check your email credentials');
+    const poolKey = `${userConfig.imap.user}:${Date.now()}`;
+    let connection = imapConnectionPool.get(poolKey);
+
+    if (connection?.state === 'disconnected') {
+      connection.end();
+      connection = null;
     }
+
+    if (!connection) {
+      const password = userConfig.imap.password.includes(':') 
+        ? await decrypt(userConfig.imap.password)
+        : userConfig.imap.password;
+      
+      const imapConfig = {
+        user: userConfig.imap.user,
+        password,
+        ...(userConfig.imap.user.toLowerCase().endsWith('@gmail.com') ? GMAIL_IMAP_CONFIG : {
+          host: userConfig.imap.host,
+          port: userConfig.imap.port,
+          tls: true,
+          tlsOptions: { 
+            rejectUnauthorized: false,
+            servername: userConfig.imap.host
+          }
+        }),
+        keepalive: true, // Enable keepalive
+        debug: process.env.NODE_ENV === 'development' ? console.log : null
+      };
+      
+      connection = new Imap(imapConfig);
+      
+      // Handle connection errors
+      connection.on('error', (err) => {
+        console.error('IMAP connection error:', err);
+        connection.end();
+        imapConnectionPool.delete(poolKey);
+      });
+
+      imapConnectionPool.set(poolKey, connection);
+      
+      // Clean up old connections
+      setTimeout(() => {
+        const conn = imapConnectionPool.get(poolKey);
+        if (conn?.end) conn.end();
+        imapConnectionPool.delete(poolKey);
+      }, CONNECTION_TIMEOUT);
+    }
+
+    return connection;
+  } catch (error) {
+    console.error('IMAP Connection Error:', error);
     throw error;
   }
 };
 
+// Merge and optimize fetchEmailsIMAP function
+const DEFAULT_FETCH_OPTIONS = {
+  bodies: ['HEADER.FIELDS (FROM TO SUBJECT DATE)', 'TEXT'],
+  struct: true,
+  envelope: true,
+  size: true,
+  flags: true
+};
+
+export const fetchEmailsIMAP = async (user, folder = 'inbox', page = 1, limit = 50) => {
+  let imap = null;
+  
+  try {
+    if (!user?.emailConfig) {
+      throw new Error('Email configuration not found');
+    }
+
+    const credentials = user.getEmailCredentials();
+    if (!credentials?.imap) {
+      throw new Error('IMAP credentials not found');
+    }
+
+    // Enhanced credentials validation with detailed error
+    const missingFields = [];
+    if (!credentials.imap.host) missingFields.push('IMAP Host');
+    if (!credentials.imap.port) missingFields.push('IMAP Port');
+    if (!credentials.imap.user) missingFields.push('Username');
+    if (!credentials.imap.password) missingFields.push('Password');
+
+    if (missingFields.length > 0) {
+      throw new Error(
+        `Email configuration incomplete. Missing: ${missingFields.join(', ')}`
+      );
+    }
+
+    // Log configuration without sensitive data
+    console.log('🔑 IMAP Configuration:', {
+      host: credentials.imap.host,
+      port: credentials.imap.port,
+      user: credentials.imap.user,
+      hasPassword: !!credentials.imap.password,
+      isGmail: credentials.imap.user?.toLowerCase().endsWith('@gmail.com')
+    });
+
+    imap = await getImapConnection(user.emailConfig);
+    
+    return new Promise((resolve, reject) => {
+      // Change allEmails to be an array since we're using push
+      const allEmails = [];
+      
+      imap.once('ready', () => {
+        // Use FOLDER_MAPPING to get correct folder path
+        const folderPath = FOLDER_MAPPING[folder.toLowerCase()] || folder;
+        
+        imap.openBox(folderPath, false, async (err, box) => {
+          if (err) {
+            console.error('Error opening mailbox:', err);
+            console.error('Attempted folder path:', folderPath);
+            return reject(err);
+          }
+
+          const total = box.messages.total;
+          const start = Math.max(1, total - ((page - 1) * limit));
+          const end = Math.max(1, start - limit);
+
+          try {
+            const fetch = imap.seq.fetch(`${end}:${start}`, DEFAULT_FETCH_OPTIONS);
+
+            fetch.on('message', (msg, seqno) => {
+              const email = {};
+
+              msg.on('body', (stream, info) => {
+                let buffer = '';
+                stream.on('data', (chunk) => {
+                  buffer += chunk.toString('utf8');
+                });
+                stream.once('end', () => {
+                  if (info.which !== 'TEXT') {
+                    email.headers = Imap.parseHeader(buffer);
+                  } else {
+                    email.body = buffer;
+                  }
+                });
+              });
+
+              msg.once('attributes', (attrs) => {
+                email.attrs = attrs;
+              });
+
+              msg.once('end', () => {
+                const processed = {
+                  id: email.attrs?.uid?.toString() || seqno.toString(),
+                  messageId: email.headers?.['message-id']?.[0],
+                  from: email.headers?.from?.[0] || '',
+                  to: email.headers?.to?.[0] || '',
+                  subject: email.headers?.subject?.[0] || '(No Subject)',
+                  date: email.headers?.date?.[0] || new Date().toISOString(),
+                  content: email.body || '',
+                  flags: email.attrs?.flags || [],
+                  labels: email.attrs?.['x-gm-labels'] || [],
+                  read: email.attrs?.flags?.includes('\\Seen') || false,
+                  starred: email.attrs?.flags?.includes('\\Flagged') || false
+                };
+
+                // Push to array instead of using Map
+                allEmails.push(processed);
+              });
+            });
+
+            fetch.once('error', (err) => {
+              console.error('Fetch error:', err);
+              reject(err);
+            });
+
+            fetch.once('end', () => {
+              imap.end();
+              
+              // Sort the array directly
+              const sortedEmails = allEmails.sort((a, b) => 
+                new Date(b.date) - new Date(a.date)
+              );
+
+              resolve({
+                success: true,
+                emails: sortedEmails,
+                pagination: {
+                  total: box.messages.total,
+                  pages: Math.ceil(box.messages.total / limit),
+                  current: page,
+                  hasMore: end > 1
+                }
+              });
+            });
+          } catch (err) {
+            console.error('Error creating fetch:', err);
+            reject(err);
+          }
+        });
+      });
+
+      imap.once('error', (err) => {
+        console.error('IMAP connection error:', err);
+        reject(err);
+      });
+
+      imap.once('end', () => {
+        console.log('IMAP connection ended');
+      });
+
+      imap.connect();
+    });
+  } catch (error) {
+    console.error('IMAP Error:', error);
+    if (imap?.end) imap.end();
+    throw error;
+  }
+};
+
+const FOLDERS = ['inbox', 'sent', 'drafts', 'spam', 'trash', 'archive', 'starred'];
+
+export const fetchAllEmails = async (user, page = 1, limit = 50) => {
+  if (!user?.emailConfig) {
+    throw new Error('Email configuration not found');
+  }
+
+  const credentials = user.getEmailCredentials();
+  if (!credentials?.imap) {
+    throw new Error('IMAP credentials not found');
+  }
+
+  const allEmails = [];
+  for (const folder of FOLDERS) {
+    const result = await fetchEmailsIMAP(user, folder, 1, 0); // Fetch all emails from each folder
+    allEmails.push(...result.emails);
+  }
+
+  // Sort all emails by date
+  allEmails.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  // Handle pagination after fetching all emails
+  const startIdx = (page - 1) * limit;
+  const endIdx = startIdx + limit;
+  const paginatedEmails = allEmails.slice(startIdx, endIdx);
+
+  return {
+    success: true,
+    emails: paginatedEmails,
+    pagination: {
+      total: allEmails.length,
+      pages: Math.ceil(allEmails.length / limit),
+      current: page,
+      hasMore: endIdx < allEmails.length,
+      totalEmails: allEmails.length
+    }
+  };
+};
+
 // Email CRUD operations
-export const sendEmail = async ({ from, to, subject, content }) => {
+export const sendEmail = async ({ from, to, subject, content, userConfig }) => {
   if (!validateEmail(to)) {
     throw new Error('Invalid recipient email address');
   }
 
   try {
-    const sender = await User.findById(from.userId).select('+emailConfig');
-    if (!sender) {
-      throw new Error('Sender not found');
+    if (!userConfig) {
+      throw new Error('Email configuration is required');
     }
-
-    const userConfig = sender.getEmailCredentials();
 
     const smtpResult = await sendEmailSMTP({ 
       from: from.email, 
@@ -389,6 +644,11 @@ export const sendEmail = async ({ from, to, subject, content }) => {
       content,
       userConfig
     });
+
+    const sender = await User.findById(from.userId);
+    if (!sender) {
+      throw new Error('Sender not found');
+    }
 
     const recipientUser = await User.findOne({ email: to });
     const conversationId = generateConversationId(from.email, to, subject);
@@ -423,36 +683,23 @@ export const sendEmail = async ({ from, to, subject, content }) => {
       { new: true }
     );
 
-    return conversation;
+    return {
+      success: true,
+      conversation,
+      smtpResult
+    };
   } catch (error) {
     console.error('Failed to send email:', error);
-    throw new Error(`Failed to send email: ${error.message}`);
+    throw error;
   }
 };
 
 export const getEmails = async (userId, { folder, page = 1, limit = ITEMS_PER_PAGE, search = '' }) => {
   try {
-    const cacheKey = `emails:${userId}:${folder}:${page}:${limit}:${search}`;
-    console.log('🔍 Checking cache for:', cacheKey);
-    
-    const cached = cache.get(cacheKey);
-    if (cached) {
-      console.log('Returning cached emails for:', cacheKey);
-      return cached;
-    }
-
     await connect();
     
-    const user = await User.findById(userId).select('+emailConfig');
-    if (!user?.emailConfig?.smtp?.host || !user?.emailConfig?.imap?.host) {
-      return {
-        success: false,
-        emails: [],
-        pagination: { total: 0, pages: 0, current: 1 },
-        error: 'EMAIL_NOT_CONFIGURED'
-      };
-    }
-
+    console.log('📂 Fetching emails from database:', { folder, page, limit });
+    
     const query = {
       participants: userId,
       status: folder,
@@ -466,7 +713,7 @@ export const getEmails = async (userId, { folder, page = 1, limit = ITEMS_PER_PA
 
     const [conversations, total] = await Promise.all([
       Email.find(query)
-        .select('subject messages.content messages.createdAt participants lastMessageAt status')
+        .select('subject messages participants lastMessageAt status')
         .sort({ lastMessageAt: -1 })
         .skip((page - 1) * limit)
         .limit(limit)
@@ -475,14 +722,12 @@ export const getEmails = async (userId, { folder, page = 1, limit = ITEMS_PER_PA
       Email.countDocuments(query)
     ]);
 
-    console.log('📨 Found emails:', {
+    console.log('📨 Found emails in database:', {
       count: conversations.length,
-      folder,
-      page,
       total
     });
 
-    const result = {
+    return {
       success: true,
       emails: conversations.map(conv => ({
         ...conv,
@@ -500,9 +745,6 @@ export const getEmails = async (userId, { folder, page = 1, limit = ITEMS_PER_PA
         hasMore: page * limit < total
       }
     };
-
-    cache.set(cacheKey, result, 300); // Cache for 5 minutes
-    return result;
   } catch (error) {
     console.error('Failed to fetch emails:', error);
     return {

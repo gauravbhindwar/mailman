@@ -1,6 +1,6 @@
 "use client"
 import Link from 'next/link';
-import { useEffect, useState, Suspense } from 'react';
+import { useEffect, useState, Suspense, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import EmailList from './EmailList';
 import { useSession } from "next-auth/react";
@@ -43,46 +43,80 @@ const fetcher = async (url) => {
   return res.json();
 };
 
-function EmailListToolbar({ selectedEmails, onRefresh }) {
+function EmailListToolbar({ selectedEmails, onRefresh, page, totalPages, onPageChange }) {
   return (
-    <motion.div 
-      initial={{ y: -20, opacity: 0 }}
-      animate={{ y: 0, opacity: 1 }}
-      className="flex items-center gap-4 p-2 border-b"
-    >
-      <button className="p-2 hover:bg-gray-100 rounded">
-        {selectedEmails.length > 0 ? <MdCheckBox /> : <MdCheckBoxOutlineBlank />}
-      </button>
-      <button 
-        onClick={onRefresh}
-        className="p-2 hover:bg-gray-100 rounded"
+    <div className="sticky top-0 z-50 bg-white shadow-sm">
+      <motion.div 
+        initial={{ y: -20, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        className="flex items-center justify-between px-4 py-2 border-b"
       >
-        <MdRefresh />
-      </button>
-      <button className="p-2 hover:bg-gray-100 rounded">
-        <MdMoreVert />
-      </button>
-      {selectedEmails.length > 0 && (
-        <motion.div 
-          initial={{ opacity: 0, x: -20 }}
-          animate={{ opacity: 1, x: 0 }}
-          className="flex gap-2"
-        >
-          <button className="p-2 hover:bg-gray-100 rounded" title="Archive">
-            <MdArchive />
+        {/* Left side controls */}
+        <div className="flex items-center gap-4">
+          <button className="p-2 hover:bg-gray-100 rounded">
+            {selectedEmails.length > 0 ? <MdCheckBox /> : <MdCheckBoxOutlineBlank />}
           </button>
-          <button className="p-2 hover:bg-gray-100 rounded" title="Delete">
-            <MdDelete />
+          <button 
+            onClick={onRefresh}
+            className="p-2 hover:bg-gray-100 rounded"
+          >
+            <MdRefresh />
           </button>
-          <button className="p-2 hover:bg-gray-100 rounded" title="Label">
-            <MdLabel />
+          <button className="p-2 hover:bg-gray-100 rounded">
+            <MdMoreVert />
           </button>
-          <button className="p-2 hover:bg-gray-100 rounded" title="Snooze">
-            <MdSchedule />
+          {selectedEmails.length > 0 && (
+            <motion.div 
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              className="flex gap-2"
+            >
+              <button className="p-2 hover:bg-gray-100 rounded" title="Archive">
+                <MdArchive />
+              </button>
+              <button className="p-2 hover:bg-gray-100 rounded" title="Delete">
+                <MdDelete />
+              </button>
+              <button className="p-2 hover:bg-gray-100 rounded" title="Label">
+                <MdLabel />
+              </button>
+              <button className="p-2 hover:bg-gray-100 rounded" title="Snooze">
+                <MdSchedule />
+              </button>
+            </motion.div>
+          )}
+        </div>
+
+        {/* Right side pagination - Always show */}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => onPageChange(Math.max(1, page - 1))}
+            disabled={page === 1}
+            className={`px-3 py-1 rounded-md border ${
+              page === 1 
+                ? 'bg-gray-50 text-gray-400 cursor-not-allowed'
+                : 'hover:bg-gray-50'
+            }`}
+          >
+            Previous
           </button>
-        </motion.div>
-      )}
-    </motion.div>
+          <span className="text-sm text-gray-600 min-w-[100px] text-center">
+            Page {page} of {totalPages}
+          </span>
+          <button
+            onClick={() => onPageChange(Math.min(totalPages, page + 1))}
+            disabled={page === totalPages}
+            className={`px-3 py-1 rounded-md border ${
+              page === totalPages
+                ? 'bg-gray-50 text-gray-400 cursor-not-allowed'
+                : 'hover:bg-gray-50'
+            }`}
+          >
+            Next
+          </button>
+        </div>
+      </motion.div>
+    </div>
   );
 }
 
@@ -107,36 +141,149 @@ function SetupEmailBanner() {
   );
 }
 
-function InboxEmailList({ userId, page, setPage }) {
+
+function PaginationBar({ currentPage, totalPages, onPageChange }) {
+  // Calculate page range to show
+  const getPageRange = () => {
+    const delta = 2; // Pages to show before and after current page
+    const range = [];
+    const rangeWithDots = [];
+
+    for (let i = 1; i <= Math.min(totalPages, 1 + 2 * delta); i++) {
+      range.push(i);
+    }
+    if (currentPage - delta > 1 + delta) {
+      range.push(null); // Add dots
+    }
+    for (let i = Math.max(1 + 2 * delta, currentPage - delta); i <= Math.min(currentPage + delta, totalPages); i++) {
+      if (!range.includes(i)) {
+        range.push(i);
+      }
+    }
+    if (currentPage + delta < totalPages - delta) {
+      range.push(null); // Add dots
+    }
+    for (let i = Math.max(totalPages - 2 * delta, currentPage + delta); i <= totalPages; i++) {
+      if (!range.includes(i)) {
+        range.push(i);
+      }
+    }
+
+    return range;
+  };
+
+  return (
+    <motion.div 
+      initial={{ y: 20, opacity: 0 }}
+      animate={{ y: 0, opacity: 1 }}
+      className="flex justify-center items-center gap-2 py-4 px-6 border-t bg-white w-full"
+    >
+      <button
+        onClick={() => onPageChange(Math.max(1, currentPage - 1))}
+        disabled={currentPage === 1}
+        className="px-4 py-2 rounded-md border hover:bg-gray-50 disabled:opacity-50"
+      >
+        Previous
+      </button>
+
+      <div className="flex items-center gap-2 mx-4">
+        {getPageRange().map((pageNum, idx) => 
+          pageNum === null ? (
+            <span key={`dot-${idx}`} className="px-2">...</span>
+          ) : (
+            <motion.button
+              key={pageNum}
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={() => onPageChange(pageNum)}
+              className={`px-4 py-2 rounded-md ${
+                currentPage === pageNum               
+                  ? 'bg-blue-500 text-white' 
+                  : 'border hover:bg-gray-50'
+              }`}
+            >
+              {pageNum}
+            </motion.button>
+          )
+        )}
+      </div>
+
+      <button
+        onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
+        disabled={currentPage === totalPages}
+        className="px-4 py-2 rounded-md border hover:bg-gray-50 disabled:opacity-50"
+      >
+        Next
+      </button>
+    </motion.div>
+  );
+}
+
+function InboxEmailList({ userId, page, setPage, showAll }) {
   const [selectedEmails, setSelectedEmails] = useState([]);
+  const folder = showAll ? 'all' : 'inbox';
+  const limit = 50; // emails per page
   
   const { data, error, isLoading, mutate } = useSWR(
-    `/api/emails/inbox?userId=${userId}&page=${page}`,
+    `/api/emails/${folder}?page=${page}&limit=${limit}`,
     fetcher,
     {
       revalidateOnFocus: false,
-      revalidateOnReconnect: false,
-      dedupingInterval: 5000,
+      dedupingInterval: 0, // Disable deduplication
+      suspense: false, // Remove suspense
+      keepPreviousData: true,
+      onError: (err) => {
+        console.error('Fetch error:', err);
+      }
     }
   );
 
-  const handleRefresh = async () => {
+  // Prefetch next page
+  useEffect(() => {
+    if (data?.pagination?.hasMore) {
+      const nextPage = page + 1;
+      fetcher(`/api/emails/${folder}?page=${nextPage}&limit=${limit}`);
+    }
+  }, [data, page, folder, limit]);
+
+  const handleRefresh = useCallback(async () => {
     try {
-      await fetch(`/api/emails/inbox?userId=${userId}&refresh=true`);
-      await mutate();
+      // Add refresh parameter and timestamp to bust cache
+      await mutate(
+        `/api/emails/${folder}?page=${page}&limit=${limit}&refresh=true&t=${Date.now()}`,
+        undefined, 
+        { revalidate: true }
+      );
     } catch (err) {
       console.error('Refresh failed:', err);
     }
-  };
+  }, [mutate, folder, page, limit]);
+
+  // Auto-refresh on mount and browser refresh
+  useEffect(() => {
+    handleRefresh();
+  }, []); // Only run once on mount
+
+  // Add event listener for browser refresh
+  useEffect(() => {
+    const handleBrowserRefresh = (e) => {
+      handleRefresh();
+    };
+
+    window.addEventListener('beforeunload', handleBrowserRefresh);
+    return () => window.removeEventListener('beforeunload', handleBrowserRefresh);
+  }, [handleRefresh]);
 
   useEffect(() => {
-    // Only refresh if we have data and no explicit error
+    handleRefresh();
+  }, [page]);
+
+  useEffect(() => {
     if (data?.success === false && !data?.error) {
       handleRefresh();
     }
   }, [data]);
 
-  // Show loading state
   if (isLoading) {
     return (
       <motion.div 
@@ -149,12 +296,23 @@ function InboxEmailList({ userId, page, setPage }) {
     );
   }
 
-  // Show configuration banner if not configured
+  if (error) {
+    return (
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        className="text-center py-8 text-gray-500"
+      >
+        <p>Error loading emails: {error.message}</p>
+      </motion.div>
+    );
+  }
+
   if (data?.error === 'EMAIL_NOT_CONFIGURED') {
     return <SetupEmailBanner />;
   }
 
-  if (!data?.emails?.length) {
+  if (!data?.emails) {
     return (
       <motion.div
         initial={{ opacity: 0 }}
@@ -162,12 +320,12 @@ function InboxEmailList({ userId, page, setPage }) {
         exit={{ opacity: 0 }}
         className="text-center py-8 text-gray-500"
       >
-        <p>No emails in inbox</p>
+        <p>Loading emails...</p>
       </motion.div>
     );
   }
 
-  const emails = data?.emails || [];
+  const emails = Array.isArray(data.emails) ? data.emails : [];
   const totalPages = data?.pagination?.pages || 1;
 
   return (
@@ -175,57 +333,32 @@ function InboxEmailList({ userId, page, setPage }) {
       <EmailListToolbar 
         selectedEmails={selectedEmails}
         onRefresh={handleRefresh}
+        page={page}
+        totalPages={data?.pagination?.pages || 1}
+        onPageChange={setPage}
       />
       
-      <motion.div
-        variants={listVariants}
-        initial="hidden"
-        animate="visible"
-        className="flex-1 overflow-auto"
-      >
-        <AnimatePresence>
-          {emails.length > 0 ? (
-            <EmailList 
-              emails={emails} 
-              type="inbox"
-              selectedEmails={selectedEmails}
-              setSelectedEmails={setSelectedEmails}
-              itemVariants={itemVariants}
-            />
-          ) : (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="text-center py-8 text-gray-500"
-            >
-              <p>No emails in inbox</p>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </motion.div>
-
-      <motion.div 
-        initial={{ y: 20, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        className="flex justify-center gap-2 p-4 border-t"
-      >
-        {Array.from({ length: totalPages }, (_, index) => (
-          <motion.button
-            key={index}
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            onClick={() => setPage(index + 1)}
-            className={`px-3 py-1 rounded ${
-              page === index + 1 
-                ? 'bg-blue-500 text-white' 
-                : 'bg-gray-100 hover:bg-gray-200'
-            }`}
+      <div className="flex-1 overflow-hidden">
+        {emails.length > 0 ? (
+          <EmailList 
+            emails={emails} 
+            type="inbox"
+            selectedEmails={selectedEmails}
+            setSelectedEmails={setSelectedEmails}
+            itemVariants={itemVariants}
+            showAll={showAll}
+          />
+        ) : (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="text-center py-8 text-gray-500"
           >
-            {index + 1}
-          </motion.button>
-        ))}
-      </motion.div>
+            <p>No emails found</p>
+          </motion.div>
+        )}
+      </div>
     </div>
   );
 }
@@ -234,6 +367,7 @@ export default function InboxPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const [page, setPage] = useState(1);
+  const [showAll, setShowAll] = useState(false);
 
   useEffect(() => {
     if (status === "unauthenticated") {
@@ -254,7 +388,7 @@ export default function InboxPage() {
   }
 
   return (
-    <div className="h-full flex flex-col relative">
+    <div className="h-screen flex flex-col">
       <motion.div 
         initial={{ y: -20, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
@@ -274,18 +408,13 @@ export default function InboxPage() {
         </motion.div>
       </motion.div>
       
-      <div className="flex-1 overflow-auto relative">
-        <Suspense fallback={
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="flex justify-center items-center h-full"
-          >
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
-          </motion.div>
-        }>
-          <InboxEmailList userId={session.user.id} page={page} setPage={setPage} />
-        </Suspense>
+      <div className="flex-1 overflow-hidden">
+        <InboxEmailList 
+          userId={session.user.id} 
+          page={page} 
+          setPage={setPage} 
+          showAll={showAll} 
+        />
       </div>
     </div>
   );

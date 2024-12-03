@@ -1,0 +1,6 @@
+Implement virtual scrolling for better performance
+Add progressive loading and lazy loading for email content
+Optimize IMAP connection pooling and caching
+Implement batch fetching for email metadata
+Add client-side caching with SWR
+Optimize email parsing and rendering

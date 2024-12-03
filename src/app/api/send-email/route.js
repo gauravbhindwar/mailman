@@ -1,46 +1,40 @@
-import { NextResponse } from 'next/server';
-import { sendEmail } from '../../../lib/email';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '../auth/[...nextauth]/authOptions';
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "../auth/[...nextauth]/authOptions";
+import { getEmailConfig } from "@/utils/email-config";
+import { sendEmail } from "@/utils/emailService";
+import { NextResponse } from "next/server";
 
 export async function POST(req) {
   try {
     const session = await getServerSession(authOptions);
-
     if (!session) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const body = await req.json();
-    const { to, subject, content } = body;
+    const { to, subject, content } = await req.json();
 
-    if (!to || !subject || !content) {
-      return NextResponse.json(
-        { error: 'Missing required fields' },
-        { status: 400 }
-      );
-    }
+    // Get email configuration for the user
+    const userConfig = await getEmailConfig(session.user.id);
 
-    const emailData = {
+    const result = await sendEmail({
       from: {
         userId: session.user.id,
         email: session.user.email
       },
       to,
       subject,
-      content
-    };
+      content,
+      userConfig // Pass the user's email configuration
+    });
 
-    const email = await sendEmail(emailData);
-    return NextResponse.json({ success: true, email });
-
+    return NextResponse.json({ success: true, data: result });
   } catch (error) {
-    console.error('Error sending email:', error);
+    console.error('Send Email API Error:', error);
     return NextResponse.json(
-      { error: error.message || 'Failed to send email' },
+      { 
+        success: false, 
+        error: error.message || 'Failed to send email' 
+      }, 
       { status: 500 }
     );
   }

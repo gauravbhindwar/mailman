@@ -25,6 +25,13 @@ export const clearCacheByPattern = (pattern) => {
 };
 
 /**
+ * Clear cache by key
+ */
+export const clearCacheByKey = (key) => {
+  return cache.del(key);
+};
+
+/**
  * Set cache with custom TTL
  */
 export const setCacheWithTTL = (key, value, ttl) => {
@@ -47,4 +54,44 @@ export const getCache = (key, refresh = false) => {
  */
 export const clearAllCache = () => {
   return cache.flushAll();
+};
+
+/**
+ * Cache emails with validation
+ */
+export const cacheEmails = (key, emails, ttl = 300) => {
+  if (!Array.isArray(emails)) {
+    console.error('Invalid emails data for caching');
+    return false;
+  }
+
+  const validatedEmails = emails.filter(email => 
+    email && email.id && (email.subject || email.content)
+  );
+
+  return cache.set(key, validatedEmails, ttl);
+};
+
+/**
+ * Get cached emails with refresh option
+ */
+export const getCachedEmails = (key, refresh = false) => {
+  if (refresh) {
+    cache.del(key);
+    return null;
+  }
+  
+  const emails = cache.get(key);
+  return Array.isArray(emails) ? emails : null;
+};
+
+/**
+ * Clear cache for a user's folder
+ */
+export const clearFolderCache = (userId, folder) => {
+  const keys = cache.keys();
+  const pattern = `emails:${userId}:${folder}`;
+  const matchingKeys = keys.filter(key => key.startsWith(pattern));
+  matchingKeys.forEach(key => cache.del(key));
+  return matchingKeys.length;
 };
