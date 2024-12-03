@@ -84,3 +84,14 @@ export const getCachedEmails = (key, refresh = false) => {
   const emails = cache.get(key);
   return Array.isArray(emails) ? emails : null;
 };
+
+/**
+ * Clear cache for a user's folder
+ */
+export const clearFolderCache = (userId, folder) => {
+  const keys = cache.keys();
+  const pattern = `emails:${userId}:${folder}`;
+  const matchingKeys = keys.filter(key => key.startsWith(pattern));
+  matchingKeys.forEach(key => cache.del(key));
+  return matchingKeys.length;
+};

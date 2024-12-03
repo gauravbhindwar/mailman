@@ -31,15 +31,18 @@ export async function GET(req, context) {
     const page = parseInt(searchParams.get('page')) || 1;
     const limit = parseInt(searchParams.get('limit')) || 50;
     const refresh = searchParams.get('refresh') === 'true';
+    
+    // Clear cache on refresh or if timestamp is provided
+    const timestamp = searchParams.get('t');
+    const shouldRefresh = refresh || timestamp;
 
-    // Clear cache if refresh is requested
     const cacheKey = getCacheKey(user._id, folder, page, limit);
-    if (refresh) {
+    if (shouldRefresh) {
       cache.del(cacheKey);
     }
-    
+
     let result;
-    if (!refresh) {
+    if (!shouldRefresh) {
       const cached = cache.get(cacheKey);
       if (cached) {
         console.log(`📫 Returning cached ${folder} emails`);
@@ -55,8 +58,8 @@ export async function GET(req, context) {
       result = await fetchEmailsIMAP(user, folder, page, limit);
 
       if (result.success) {
-        // Set cache with 5 minute TTL for better performance
-        cache.set(cacheKey, result, 300); // 5 minute TTL
+        // Set shorter cache TTL for better freshness
+        cache.set(cacheKey, result, 60); // 1 minute TTL
         return NextResponse.json({
           ...result,
           cached: false

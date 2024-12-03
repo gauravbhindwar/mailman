@@ -229,7 +229,7 @@ function InboxEmailList({ userId, page, setPage, showAll }) {
     fetcher,
     {
       revalidateOnFocus: false,
-      dedupingInterval: 30000,
+      dedupingInterval: 0, // Disable deduplication
       suspense: false, // Remove suspense
       keepPreviousData: true,
       onError: (err) => {
@@ -248,14 +248,31 @@ function InboxEmailList({ userId, page, setPage, showAll }) {
 
   const handleRefresh = useCallback(async () => {
     try {
+      // Add refresh parameter and timestamp to bust cache
       await mutate(
-        `/api/emails/${folder}?page=${page}&limit=${limit}&timestamp=${Date.now()}`,
+        `/api/emails/${folder}?page=${page}&limit=${limit}&refresh=true&t=${Date.now()}`,
+        undefined, 
         { revalidate: true }
       );
     } catch (err) {
       console.error('Refresh failed:', err);
     }
   }, [mutate, folder, page, limit]);
+
+  // Auto-refresh on mount and browser refresh
+  useEffect(() => {
+    handleRefresh();
+  }, []); // Only run once on mount
+
+  // Add event listener for browser refresh
+  useEffect(() => {
+    const handleBrowserRefresh = (e) => {
+      handleRefresh();
+    };
+
+    window.addEventListener('beforeunload', handleBrowserRefresh);
+    return () => window.removeEventListener('beforeunload', handleBrowserRefresh);
+  }, [handleRefresh]);
 
   useEffect(() => {
     handleRefresh();
