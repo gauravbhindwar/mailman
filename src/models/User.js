@@ -98,16 +98,27 @@ userSchema.methods.comparePassword = async function(candidatePassword) {
 
 // Add method to safely get decrypted credentials
 userSchema.methods.getEmailCredentials = function() {
-  return {
-    smtp: {
-      ...this.emailConfig.smtp,
-      password: this.emailConfig.smtp.password ? decrypt(this.emailConfig.smtp.password) : null
-    },
-    imap: {
-      ...this.emailConfig.imap,
-      password: this.emailConfig.imap.password ? decrypt(this.emailConfig.imap.password) : null
-    }
-  };
+  try {
+    const smtp = this.emailConfig?.smtp || {};
+    const imap = this.emailConfig?.imap || {};
+
+    return {
+      smtp: {
+        ...smtp,
+        password: smtp.password ? decrypt(smtp.password) : null
+      },
+      imap: {
+        ...imap,
+        password: imap.password ? decrypt(imap.password) : null
+      }
+    };
+  } catch (error) {
+    console.error('Error decrypting credentials:', error);
+    return {
+      smtp: { ...this.emailConfig?.smtp, password: null },
+      imap: { ...this.emailConfig?.imap, password: null }
+    };
+  }
 };
 
 export default mongoose.models.User || mongoose.model('User', userSchema);

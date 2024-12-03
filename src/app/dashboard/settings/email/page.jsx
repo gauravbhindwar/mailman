@@ -71,16 +71,36 @@ export default function EmailSetup() {
   const saveConfig = async (e) => {
     e.preventDefault();
     try {
-      const res = await fetch('/api/nodemailer', {
+      const res = await fetch('/api/user/email-config', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config)
+        body: JSON.stringify({
+          emailConfig: {
+            smtp: {
+              host: config.smtp.host,
+              port: parseInt(config.smtp.port),
+              secure: config.smtp.secure,
+              user: config.smtp.user,
+              password: config.smtp.password
+            },
+            imap: {
+              host: config.imap.host,
+              port: parseInt(config.imap.port),
+              user: config.imap.user,
+              password: config.imap.password
+            }
+          }
+        })
       });
+
       if (res.ok) {
-        alert('Gmail configuration saved successfully!');
+        alert('Email configuration saved successfully!');
+      } else {
+        throw new Error('Failed to save configuration');
       }
     } catch (error) {
       console.error('Failed to save config:', error);
+      alert('Failed to save configuration: ' + error.message);
     }
   };
 

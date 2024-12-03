@@ -86,6 +86,27 @@ function EmailListToolbar({ selectedEmails, onRefresh }) {
   );
 }
 
+function SetupEmailBanner() {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: -20 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="p-4 mb-4 bg-white border rounded-lg shadow-sm"
+    >
+      <h3 className="text-lg font-medium text-gray-900">Welcome to your Inbox!</h3>
+      <p className="mt-1 text-gray-600">
+        To start receiving emails, you need to configure your email settings first.
+      </p>
+      <Link
+        href="/dashboard/settings/email"
+        className="mt-3 inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
+      >
+        Configure Email Settings
+      </Link>
+    </motion.div>
+  );
+}
+
 function InboxEmailList({ userId, page, setPage }) {
   const [selectedEmails, setSelectedEmails] = useState([]);
   
@@ -95,14 +116,27 @@ function InboxEmailList({ userId, page, setPage }) {
     {
       revalidateOnFocus: false,
       revalidateOnReconnect: false,
-      dedupingInterval: 10000, // Cache for 10 seconds
+      dedupingInterval: 5000,
     }
   );
 
-  const handleRefresh = () => {
-    mutate(); // This will trigger a revalidation
+  const handleRefresh = async () => {
+    try {
+      await fetch(`/api/emails/inbox?userId=${userId}&refresh=true`);
+      await mutate();
+    } catch (err) {
+      console.error('Refresh failed:', err);
+    }
   };
 
+  useEffect(() => {
+    // Only refresh if we have data and no explicit error
+    if (data?.success === false && !data?.error) {
+      handleRefresh();
+    }
+  }, [data]);
+
+  // Show loading state
   if (isLoading) {
     return (
       <motion.div 
@@ -115,8 +149,26 @@ function InboxEmailList({ userId, page, setPage }) {
     );
   }
 
+  // Show configuration banner if not configured
+  if (data?.error === 'EMAIL_NOT_CONFIGURED') {
+    return <SetupEmailBanner />;
+  }
+
+  if (!data?.emails?.length) {
+    return (
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="text-center py-8 text-gray-500"
+      >
+        <p>No emails in inbox</p>
+      </motion.div>
+    );
+  }
+
   const emails = data?.emails || [];
-  const totalPages = data?.totalPages || 1;
+  const totalPages = data?.pagination?.pages || 1;
 
   return (
     <div className="flex flex-col h-full">
