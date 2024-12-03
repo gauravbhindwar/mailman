@@ -1,6 +1,6 @@
 import { connect } from '../lib/dbConfig';
 import User from '../models/User';
-import { fetchEmailsIMAP } from '../utils/emailService';
+import { fetchEmailsIMAP, sendEmailSMTP } from '../utils/emailService';
 import { cache, clearCacheByPattern, getCacheKey, clearCacheByKey } from '../utils/cache';
 
 const serializeDate = (date) => {
@@ -119,7 +119,17 @@ export const getSentEmails = async (userId) => {
   }
 };
 
-export async function sendEmail(emailData) {
-  await connect(); // Ensure DB connection first
-  return sendEmailService(emailData);
+export async function sendEmail({ from, to, subject, content, userConfig }) {
+  if (!userConfig) {
+    throw new Error('Email configuration is required');
+  }
+
+  await connect();
+  return sendEmailSMTP({ 
+    from, 
+    to, 
+    subject, 
+    content, 
+    userConfig 
+  });
 }

@@ -9,6 +9,7 @@ import { connect } from '../lib/dbConfig';
 import { generateConversationId } from './emailUtils';
 import NodeCache from 'node-cache';
 import { cache, getCacheKey } from './cache';
+import { validateSMTPConfig } from './email-config';
 
 const ITEMS_PER_PAGE = 50; // Ensure consistent limit
 
@@ -38,18 +39,33 @@ const validateEmail = (email) => {
 
 // Create dynamic SMTP transporter with Gmail defaults
 const createSMTPTransport = (userConfig) => {
-  return nodemailer.createTransport({
-    host: userConfig.smtp?.host || process.env.EMAIL_HOST,
-    port: parseInt(userConfig.smtp?.port) || parseInt(process.env.EMAIL_PORT),
-    secure: userConfig.smtp?.secure || false,
+  validateSMTPConfig(userConfig);
+  const { host, port, user, password, secure = true, requireTLS = true } = userConfig.smtp;
+
+  const transportConfig = {
+    host,
+    port: parseInt(port),
+    secure, // Use secure for port 465, false for other ports
     auth: {
-      user: userConfig.smtp?.user || process.env.EMAIL_USER,
-      pass: userConfig.smtp?.password || process.env.EMAIL_PASS,
+      user,
+      pass: password,
     },
+    requireTLS,
     tls: {
       rejectUnauthorized: false,
+      minVersion: 'TLSv1.2'
     },
-  });
+    debug: process.env.NODE_ENV === 'development',
+    logger: process.env.NODE_ENV === 'development',
+  };
+
+  // Special handling for different ports
+  if (port === 587) {
+    transportConfig.secure = false;
+    transportConfig.requireTLS = true;
+  }
+
+  return nodemailer.createTransport(transportConfig);
 };
 
 // Create SMTP transporter for verification emails
@@ -66,16 +82,48 @@ const createVerificationTransport = () => {
   });
 };
 
-// Send email using Gmail SMTP configuration
+// Send email using SMTP configuration
 export const sendEmailSMTP = async ({ from, to, subject, content, attachments = [], userConfig }) => {
+  if (!userConfig?.smtp) {
+    throw new Error('SMTP configuration is missing. Please configure your email settings.');
+  }
+
+  const { host, port, user, password } = userConfig.smtp;
+  
+  if (!host || !port || !user || !password) {
+    const missing = [];
+    if (!host) missing.push('SMTP Host');
+    if (!port) missing.push('SMTP Port');
+    if (!user) missing.push('SMTP Username');
+    if (!password) missing.push('SMTP Password');
+    throw new Error(`Incomplete SMTP configuration. Missing: ${missing.join(', ')}`);
+  }
+
   try {
     await connect();
     
     const transporter = createSMTPTransport(userConfig);
-    await transporter.verify();
+    
+    // Verify SMTP connection with detailed error handling
+    try {
+      await transporter.verify();
+    } catch (verifyError) {
+      console.error('SMTP Verification Error:', {
+        error: verifyError,
+        config: {
+          host: userConfig.smtp.host,
+          port: userConfig.smtp.port,
+          secure: userConfig.smtp.secure,
+          user: userConfig.smtp.user
+        }
+      });
+      throw new Error(
+        `SMTP connection failed: ${verifyError.message}. Please check your email settings.`
+      );
+    }
 
     const mailOptions = {
-      from: userConfig.smtp?.user || process.env.EMAIL_USER,
+      from: userConfig.smtp.user, // Use configured SMTP user as sender
       to,
       subject,
       html: content,
@@ -83,10 +131,33 @@ export const sendEmailSMTP = async ({ from, to, subject, content, attachments = 
     };
 
     const info = await transporter.sendMail(mailOptions);
-    return info;
+    return {
+      success: true,
+      messageId: info.messageId,
+      response: info.response,
+    };
   } catch (error) {
-    console.error('SMTP Error:', error);
-    throw new Error('Failed to send email via SMTP');
+    console.error('SMTP Error Details:', {
+      code: error.code,
+      command: error.command,
+      response: error.response,
+      responseCode: error.responseCode,
+      message: error.message,
+      stack: error.stack
+    });
+    
+    let errorMessage;
+    if (error.message.includes('SMTP configuration')) {
+      errorMessage = error.message;
+    } else if (error.code === 'EAUTH') {
+      errorMessage = 'SMTP authentication failed - check your credentials';
+    } else if (error.code === 'ESOCKET') {
+      errorMessage = 'Could not connect to SMTP server';
+    } else {
+      errorMessage = `Failed to send email: ${error.message}`;
+    }
+    
+    throw new Error(errorMessage);
   }
 };
 
@@ -218,6 +289,20 @@ const FOLDER_MAPPING = {
   'spam': '[Gmail]/Spam',
   'trash': '[Gmail]/Trash',
   'archive': '[Gmail]/All Mail',
+  'starred': '[Gmail]/Starred',
+  // Add mappings for other email providers
+  'hotmail': {
+    'sent': 'Sent',
+    'spam': 'Junk',
+    'trash': 'Deleted',
+    'archive': 'Archive'
+  },
+  'yahoo': {
+    'sent': 'Sent',
+    'spam': 'Bulk Mail',
+    'trash': 'Trash',
+    'archive': 'Archive'
+  }
 };
 
 export const fetchEmailsIMAP = async (user, folder = 'inbox', page = 1, limit = ITEMS_PER_PAGE) => {
@@ -281,11 +366,18 @@ export const fetchEmailsIMAP = async (user, folder = 'inbox', page = 1, limit = 
     const emails = new Map(); // Use Map to track emails by seqno
 
     imap.once('ready', () => {
-      const imapFolder = FOLDER_MAPPING[folder] || 'INBOX';
+      // Get folder mapping based on email provider
+      const provider = credentials.imap.user.toLowerCase().includes('gmail.com') ? 'gmail' :
+                      credentials.imap.user.toLowerCase().includes('hotmail.com') ? 'hotmail' :
+                      credentials.imap.user.toLowerCase().includes('yahoo.com') ? 'yahoo' : 'gmail';
       
-      imap.openBox(imapFolder, false, async (err, box) => {
+      const folderMap = typeof FOLDER_MAPPING[provider] === 'object' ? 
+                       FOLDER_MAPPING[provider][folder] || folder.toUpperCase() :
+                       FOLDER_MAPPING[folder] || folder.toUpperCase();
+
+      imap.openBox(folderMap, false, async (err, box) => {
         if (err) {
-          console.error(`Error opening folder ${imapFolder}:`, err);
+          console.error(`Error opening folder ${folderMap}:`, err);
           imap.end();
           return reject(err);
         }
@@ -422,18 +514,15 @@ export const fetchEmailsIMAP = async (user, folder = 'inbox', page = 1, limit = 
 };
 
 // Email CRUD operations
-export const sendEmail = async ({ from, to, subject, content }) => {
+export const sendEmail = async ({ from, to, subject, content, userConfig }) => {
   if (!validateEmail(to)) {
     throw new Error('Invalid recipient email address');
   }
 
   try {
-    const sender = await User.findById(from.userId).select('+emailConfig');
-    if (!sender) {
-      throw new Error('Sender not found');
+    if (!userConfig) {
+      throw new Error('Email configuration is required');
     }
-
-    const userConfig = sender.getEmailCredentials();
 
     const smtpResult = await sendEmailSMTP({ 
       from: from.email, 
@@ -442,6 +531,11 @@ export const sendEmail = async ({ from, to, subject, content }) => {
       content,
       userConfig
     });
+
+    const sender = await User.findById(from.userId);
+    if (!sender) {
+      throw new Error('Sender not found');
+    }
 
     const recipientUser = await User.findOne({ email: to });
     const conversationId = generateConversationId(from.email, to, subject);
@@ -476,10 +570,14 @@ export const sendEmail = async ({ from, to, subject, content }) => {
       { new: true }
     );
 
-    return conversation;
+    return {
+      success: true,
+      conversation,
+      smtpResult
+    };
   } catch (error) {
     console.error('Failed to send email:', error);
-    throw new Error(`Failed to send email: ${error.message}`);
+    throw error;
   }
 };
 

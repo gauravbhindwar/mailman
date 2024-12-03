@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState, Suspense } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import EmailList from '@/components/Dashboard/EmailList';
 import { useSession } from "next-auth/react";
