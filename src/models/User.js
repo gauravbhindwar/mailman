@@ -99,25 +99,29 @@ userSchema.methods.comparePassword = async function(candidatePassword) {
 // Add method to safely get decrypted credentials
 userSchema.methods.getEmailCredentials = function() {
   try {
+    if (!this.emailConfig) return null;
+
     const smtp = this.emailConfig?.smtp || {};
     const imap = this.emailConfig?.imap || {};
 
     return {
       smtp: {
-        ...smtp,
+        host: smtp.host,
+        port: smtp.port,
+        secure: smtp.secure,
+        user: smtp.user,
         password: smtp.password ? decrypt(smtp.password) : null
       },
       imap: {
-        ...imap,
+        host: imap.host,
+        port: imap.port,
+        user: imap.user,
         password: imap.password ? decrypt(imap.password) : null
       }
     };
   } catch (error) {
     console.error('Error decrypting credentials:', error);
-    return {
-      smtp: { ...this.emailConfig?.smtp, password: null },
-      imap: { ...this.emailConfig?.imap, password: null }
-    };
+    return null;
   }
 };
 

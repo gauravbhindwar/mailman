@@ -25,6 +25,13 @@ export const clearCacheByPattern = (pattern) => {
 };
 
 /**
+ * Clear cache by key
+ */
+export const clearCacheByKey = (key) => {
+  return cache.del(key);
+};
+
+/**
  * Set cache with custom TTL
  */
 export const setCacheWithTTL = (key, value, ttl) => {

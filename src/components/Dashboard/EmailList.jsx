@@ -1,9 +1,17 @@
-import { useState } from 'react';
+"use client"
+import React, { useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Link from 'next/link';
 import { MdStar, MdStarBorder, MdCheckBox, MdCheckBoxOutlineBlank, MdArchive, MdDelete } from 'react-icons/md';
 import { formatDistanceToNow } from 'date-fns';
 import EmailDetail from './EmailDetail';
+import useSWR from 'swr';
+
+const fetcher = async (url) => {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('Failed to fetch');
+  return res.json();
+};
 
 // Helper functions
 const getInitials = (name) => {
@@ -55,9 +63,19 @@ const itemAnimation = {
   show: { opacity: 1, x: 0 }
 };
 
-const EmailItem = ({ email, type, selectedEmails, toggleEmailSelection, toggleStar, itemVariants, onClick }) => {
+const EmailItem = React.memo(function EmailItem({ email, type, selectedEmails, toggleEmailSelection, toggleStar, itemVariants, onClick }) {
   const sender = getSenderInfo(email, type);
   const lastMessage = email.messages?.[email.messages.length - 1] || {};
+  const messageDate = email.lastMessageAt || email.date;
+
+  // Safe date formatting
+  const getFormattedDate = (dateStr) => {
+    try {
+      return formatDistanceToNow(new Date(dateStr), { addSuffix: true });
+    } catch (error) {
+      return 'Invalid date';
+    }
+  };
 
   // Get preview text without HTML tags
   const getPreviewText = (content) => {
@@ -81,7 +99,7 @@ const EmailItem = ({ email, type, selectedEmails, toggleEmailSelection, toggleSt
       }}
       className={`group relative ${!email.read ? 'bg-blue-50' : 'bg-white'} border-b border-gray-100`}
     >
-      <div className="flex items-center p-4 cursor-pointer" onClick={(e) => handleClick(e, email)}>
+      <div className="flex items-center p-4 cursor-pointer" onClick={handleClick}>
         <div className="flex items-center space-x-2 min-w-[80px]">
           {/* Selection and Star buttons */}
           <motion.button
@@ -142,7 +160,7 @@ const EmailItem = ({ email, type, selectedEmails, toggleEmailSelection, toggleSt
               className="text-sm text-gray-500"
               whileHover={{ scale: 1.02 }}
             >
-              {formatDistanceToNow(new Date(email.lastMessageAt), { addSuffix: true })}
+              {messageDate ? getFormattedDate(messageDate) : 'Unknown date'}
             </motion.span>
           </div>
           <h3 className="text-sm font-medium text-gray-800 mb-1">
@@ -177,29 +195,29 @@ const EmailItem = ({ email, type, selectedEmails, toggleEmailSelection, toggleSt
       </div>
     </motion.div>
   );
-};
+});
 
-const EmailList = ({ emails, type, selectedEmails = [], setSelectedEmails = () => {}, itemVariants }) => {
+const EmailList = ({ emails, type, selectedEmails, setSelectedEmails, itemVariants }) => {
   const [selectedEmail, setSelectedEmail] = useState(null);
   
-  const toggleEmailSelection = (emailId, e) => {
+  const toggleEmailSelection = useCallback((emailId, e) => {
     e.preventDefault();
     setSelectedEmails(prev => 
       prev.includes(emailId) ? prev.filter(id => id !== emailId) : [...prev, emailId]
     );
-  };
+  }, [setSelectedEmails]);
 
-  const toggleStar = async (emailId, e) => {
+  const toggleStar = useCallback(async (emailId, e) => {
     e.preventDefault();
     // Implement star toggle functionality
-  };
+  }, []);
 
-  const handleEmailClick = (e, email) => {
+  const handleEmailClick = useCallback((e, email) => {
     e.preventDefault();
     setSelectedEmail(email);
-  };
+  }, []);
 
-  if (!emails?.length) {
+  if (!Array.isArray(emails) || emails.length === 0) {
     return (
       <motion.div
         initial={{ opacity: 0 }}
@@ -220,9 +238,9 @@ const EmailList = ({ emails, type, selectedEmails = [], setSelectedEmails = () =
         animate="show"
         className="divide-y divide-gray-100"
       >
-        {emails?.map((email) => (
+        {emails.map((email) => (
           <EmailItem
-            key={email.id}
+            key={email.id || email.messageId || email.uid || Math.random().toString()}
             email={email}
             type={type}
             selectedEmails={selectedEmails}
@@ -244,4 +262,4 @@ const EmailList = ({ emails, type, selectedEmails = [], setSelectedEmails = () =
   );
 };
 
-export default EmailList;
+export default React.memo(EmailList);

@@ -1,7 +1,7 @@
 import { connect } from '../lib/dbConfig';
 import User from '../models/User';
-import { fetchAndStoreExternalEmails, getEmails, sendEmail as sendEmailService } from '../utils/emailService';
-import { cache, clearCacheByPattern, getCacheKey } from '../utils/cache';
+import { fetchEmailsIMAP } from '../utils/emailService';
+import { cache, clearCacheByPattern, getCacheKey, clearCacheByKey } from '../utils/cache';
 
 const serializeDate = (date) => {
   if (!date) return null;
@@ -65,26 +65,28 @@ export const getInboxEmails = async (userId, forceRefresh = false) => {
       };
     }
     
-    if (forceRefresh) {
-      console.log('Forcing refresh of external emails');
-      await clearCacheByPattern(`emails:${userId}`);
-      await fetchAndStoreExternalEmails(userId);
+    const cacheKey = getCacheKey(userId, 'inbox', 1, 50);  // Ensure consistent limit
+    console.log('🔍 Checking cache for:', cacheKey);
+    
+    if (!forceRefresh) {
+      const cached = cache.get(cacheKey);
+      if (cached) {
+        console.log('✨ Returning cached emails for:', cacheKey);
+        return { ...cached, cached: true };
+      }
     }
 
-    // Get emails from database
-    const result = await getEmails(userId, { 
-      folder: 'inbox',
-      page: 1,
-      limit: 50 
-    });
+    console.log('🔄 Fetching fresh emails from mail server');
+    const result = await fetchEmailsIMAP(user, 'inbox', 1, 50);
 
-    return {
-      success: true,
-      emails: result.emails || [],
-      pagination: result.pagination || {}
-    };
+    if (result.success) {
+      console.log('💾 Caching emails with key:', cacheKey);
+      cache.set(cacheKey, result, 300); // 5 minute TTL
+    }
+
+    return { ...result, cached: false };
   } catch (error) {
-    console.error('Error in getInboxEmails:', error);
+    console.error('❌ Error in getInboxEmails:', error);
     return { 
       success: false,
       emails: [], 
