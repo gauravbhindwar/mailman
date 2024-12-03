@@ -32,6 +32,11 @@ export async function GET(req, context) {
     const limit = parseInt(searchParams.get('limit')) || 50;
     const refresh = searchParams.get('refresh') === 'true';
     
+    // Special handling for sent folder
+    const folderPath = folder === 'sent' 
+      ? '[Gmail]/Sent Mail'
+      : folder === 'all' ? '[Gmail]/All Mail' : folder.toUpperCase();
+
     // Clear cache on refresh or if timestamp is provided
     const timestamp = searchParams.get('t');
     const shouldRefresh = refresh || timestamp;
@@ -55,11 +60,22 @@ export async function GET(req, context) {
 
     console.log(`🔄 Fetching fresh ${folder} emails`);
     try {
-      result = await fetchEmailsIMAP(user, folder, page, limit);
-
+      result = await fetchEmailsIMAP(user, folderPath, page, limit);
+      
       if (result.success) {
-        // Set shorter cache TTL for better freshness
-        cache.set(cacheKey, result, 60); // 1 minute TTL
+        // For sent folder, filter emails sent by the user
+        if (folder === 'sent') {
+          result.emails = result.emails.filter(email => {
+            const fromEmail = email.fromDetails?.email || email.from.match(/<(.+)>/)?.[1] || email.from;
+            return fromEmail.toLowerCase() === user.emailConfig.smtp.user.toLowerCase();
+          });
+          
+          // Update pagination
+          result.pagination.total = result.emails.length;
+          result.pagination.pages = Math.ceil(result.emails.length / limit);
+        }
+
+        cache.set(cacheKey, result, 60);
         return NextResponse.json({
           ...result,
           cached: false

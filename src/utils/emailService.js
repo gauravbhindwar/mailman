@@ -268,37 +268,64 @@ const formatEmailAddress = (addr) => {
   return text || '';
 };
 
-const processMessage = async (stream, attrs = {}) => {
+const processMessage = async (rawEmail, attrs = {}) => {
   try {
-    const parsed = await simpleParser(stream);
+    const parsed = await simpleParser(rawEmail);
+    const envelope = attrs.envelope || {};
     
-    // Generate a unique message ID
-    const messageId = attrs.uid || 
-      parsed.messageId || 
-      `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    // Extract sender details with better fallbacks
+    const fromEnvelope = envelope.from?.[0] || {};
+    const fromHeader = parsed.from?.value?.[0] || {};
+    
+    // Build sender information
+    const senderName = fromEnvelope.name || 
+                      fromHeader.name || 
+                      parsed.from?.text?.split('<')[0]?.trim() || 
+                      fromEnvelope.mailbox || 
+                      '';
+                      
+    const senderEmail = fromEnvelope.mailbox && fromEnvelope.host ? 
+      `${fromEnvelope.mailbox}@${fromEnvelope.host}` : 
+      fromHeader.address || 
+      parsed.from?.text?.match(/<(.+)>/)?.[1] || 
+      '';
 
-    // Parse email addresses more reliably
-    const from = parsed.from?.value?.[0] || {};
-    const to = Array.isArray(parsed.to?.value) ? parsed.to.value : [];
+    // Extract recipient details
+    const toEnvelope = envelope.to?.[0] || {};
+    const toHeader = parsed.to?.value?.[0] || {};
+    
+    const recipientName = toEnvelope.name || toHeader.name || '';
+    const recipientEmail = toEnvelope.mailbox && toEnvelope.host ? 
+      `${toEnvelope.mailbox}@${toEnvelope.host}` : 
+      toHeader.address || '';
+
+    // Format sender/recipient strings
+    const from = senderName ? `${senderName} <${senderEmail}>` : senderEmail;
+    const to = recipientName ? `${recipientName} <${recipientEmail}>` : recipientEmail;
 
     return {
-      id: messageId,
-      uid: attrs.uid || messageId,
-      threadId: attrs['x-gm-thrid']?.toString(),
-      from: from.address ? `${from.name || ''} <${from.address}>` : from.name || 'Unknown',
-      to: to.map(t => t.address).join(', '),
-      subject: parsed.subject || '(No Subject)',
-      content: parsed.html || parsed.textAsHtml || parsed.text || '',
-      date: attrs.date || parsed.date || new Date(),
-      read: attrs.flags?.includes('\\Seen') || false,
-      labels: attrs['x-gm-labels']?.map(label => label.toString().replace(/\\/g, '')) || [],
-      flags: attrs.flags || [],
-      folder: 'inbox',
-      starred: attrs.flags?.includes('\\Flagged') || false
+      // ...existing code...
+      from,
+      fromDetails: {
+        name: senderName.replace(/["']/g, '').trim(),
+        email: senderEmail,
+        raw: from,
+        mailbox: fromEnvelope.mailbox || '',
+        host: fromEnvelope.host || '',
+        displayName: senderName || senderEmail.split('@')[0] || 'Unknown'
+      },
+      to,
+      toDetails: {
+        name: recipientName.replace(/["']/g, '').trim(),
+        email: recipientEmail,
+        raw: to,
+        mailbox: toEnvelope.mailbox || '',
+        host: toEnvelope.host || ''
+      },
+      // ...existing code...
     };
   } catch (error) {
-    console.error('Error processing message:', error);
-    return null;
+    // ...existing code...
   }
 };
 
@@ -449,10 +476,11 @@ export const fetchEmailsIMAP = async (user, folder = 'inbox', page = 1, limit = 
     imap = await getImapConnection(user.emailConfig);
     
     return new Promise((resolve, reject) => {
+      // Change allEmails to be an array since we're using push
       const allEmails = [];
       
       imap.once('ready', () => {
-        imap.openBox(folder === 'all' ? '[Gmail]/All Mail' : 'INBOX', false, (err, box) => {
+        imap.openBox(folder, false, async (err, box) => {
           if (err) {
             console.error('Error opening mailbox:', err);
             return reject(err);
@@ -500,6 +528,8 @@ export const fetchEmailsIMAP = async (user, folder = 'inbox', page = 1, limit = 
                   read: email.attrs?.flags?.includes('\\Seen') || false,
                   starred: email.attrs?.flags?.includes('\\Flagged') || false
                 };
+
+                // Push to array instead of using Map
                 allEmails.push(processed);
               });
             });
@@ -511,12 +541,18 @@ export const fetchEmailsIMAP = async (user, folder = 'inbox', page = 1, limit = 
 
             fetch.once('end', () => {
               imap.end();
+              
+              // Sort the array directly
+              const sortedEmails = allEmails.sort((a, b) => 
+                new Date(b.date) - new Date(a.date)
+              );
+
               resolve({
                 success: true,
-                emails: allEmails.sort((a, b) => new Date(b.date) - new Date(a.date)),
+                emails: sortedEmails,
                 pagination: {
-                  total,
-                  pages: Math.ceil(total / limit),
+                  total: box.messages.total,
+                  pages: Math.ceil(box.messages.total / limit),
                   current: page,
                   hasMore: end > 1
                 }
