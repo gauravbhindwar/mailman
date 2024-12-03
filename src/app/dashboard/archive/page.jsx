@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, Suspense } from 'react';
+import { useEffect, useState, useCallback, Suspense } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import EmailList from '@/components/Dashboard/EmailList';
@@ -121,21 +121,18 @@ function ArchiveEmailList({ userId, page, setPage }) {
     }
   );
 
-  const handleRefresh = async () => {
+  const handleRefresh = useCallback(async () => {
     try {
       await fetch(`/api/emails/archive?userId=${userId}&refresh=true`);
       await mutate();
     } catch (err) {
       console.error('Refresh failed:', err);
     }
-  };
+  }, [userId, mutate]);
 
   useEffect(() => {
-    // Only refresh if we have data and no explicit error
-    if (data?.success === false && !data?.error) {
-      handleRefresh();
-    }
-  }, [data]);
+    handleRefresh();
+  }, [handleRefresh]);
 
   // Show loading state
   if (isLoading) {

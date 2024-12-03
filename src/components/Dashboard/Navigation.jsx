@@ -23,8 +23,10 @@ const iconMap = {
   ExclamationCircle: ExclamationCircleIcon,
 };
 
-export default function Navigation({ items }) {
+export default function Navigation({ items, isAuthenticated }) {
   const pathname = usePathname();
+
+  if (!isAuthenticated) return null;
 
   return (
     <nav className="w-64 bg-white border-r border-gray-200 pt-5 pb-4 flex flex-col">

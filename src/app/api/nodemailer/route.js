@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { sendEmailSMTP, fetchEmailsIMAP } from '@/utils/emailService';
 import { auth } from '@/lib/auth';
 import { encrypt } from '@/utils/encryption';
-import { User } from '@/models/User';
+import User from '@/models/User';
 
 export async function POST(request) {
   try {

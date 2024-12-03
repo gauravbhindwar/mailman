@@ -1,4 +1,3 @@
-
 "use client"
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
@@ -48,7 +47,7 @@ function AllEmails({ userId, page, setPage }) {
 
   useEffect(() => {
     handleRefresh();
-  }, [page]);
+  }, [handleRefresh]); // Added handleRefresh
 
   if (isLoading) {
     return (

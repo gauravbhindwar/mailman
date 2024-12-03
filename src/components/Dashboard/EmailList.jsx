@@ -109,6 +109,10 @@ const TagBadge = ({ tag }) => {
 const getPreviewText = (content) => {
   if (!content) return 'No message content';
   
+  if (typeof content === 'object') {
+    content = content.html || content.text || '';
+  }
+
   const div = document.createElement('div');
   div.innerHTML = content;
   const text = div.textContent || div.innerText || '';
@@ -132,24 +136,28 @@ const formatEmail = (email) => {
   };
 };
 
+// Move getSenderDetails outside component
+const getSenderDetails = (formattedEmail, type) => {
+  if (!formattedEmail) return { name: 'Unknown', email: '', isRecipient: false };
+  
+  if (type === 'sent') {
+    const toMatch = formattedEmail.to.match(/^(.*?)?(?:\s*<(.+?)>)?$/);
+    return {
+      name: toMatch ? toMatch[1]?.trim() || toMatch[2]?.split('@')[0] : 'Unknown',
+      email: toMatch ? toMatch[2] || formattedEmail.to : formattedEmail.to,
+      isRecipient: true
+    };
+  }
+  return { ...getSenderInfo(formattedEmail, type), isRecipient: false };
+};
+
 const EmailItem = React.memo(function EmailItem({ email, type, selectedEmails, toggleEmailSelection, toggleStar, itemVariants, onClick, showAll }) {
   const formattedEmail = formatEmail(email);
   
   if (!formattedEmail) return null;
 
-  // Modified sender info to handle sent folder
-  const sender = useMemo(() => {
-    if (type === 'sent') {
-      // For sent folder, show recipient info instead of sender
-      const toMatch = formattedEmail.to.match(/^(.*?)?(?:\s*<(.+?)>)?$/);
-      return {
-        name: toMatch ? toMatch[1]?.trim() || toMatch[2]?.split('@')[0] : 'Unknown',
-        email: toMatch ? toMatch[2] || formattedEmail.to : formattedEmail.to,
-        isRecipient: true
-      };
-    }
-    return getSenderInfo(formattedEmail, type);
-  }, [formattedEmail, type]);
+  // Direct calculation instead of useMemo
+  const sender = getSenderDetails(formattedEmail, type);
 
   const lastMessage = formattedEmail.messages?.[formattedEmail.messages.length - 1] || {};
   const messageDate = formattedEmail.lastMessageAt || formattedEmail.date;
@@ -283,7 +291,7 @@ const EmailItem = React.memo(function EmailItem({ email, type, selectedEmails, t
             className="p-1 rounded-full hover:bg-gray-100"
           >
             <MdDelete className="w-5 h-5 text-gray-500" />
-          </motion.button>
+          </motion.button> {/* Corrected closing tag */}
         </motion.div>
       </div>
     </motion.div>
@@ -300,14 +308,45 @@ const generateUniqueKey = (email) => {
 const EmailList = ({ emails = [], type, selectedEmails = [], setSelectedEmails, itemVariants, showAll, page, limit }) => {
   const [isClient, setIsClient] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true); // renamed from isLoading
+  const [selectedEmail, setSelectedEmail] = useState(null);
 
   useEffect(() => {
     setIsClient(true);
     setInitialLoading(false);
   }, []);
 
-  const [selectedEmail, setSelectedEmail] = useState(null);
-  
+  // Move useSWR before handleRefresh
+  const { data, error, isLoading: fetchLoading, mutate } = useSWR(
+    `/api/emails/${showAll ? 'all' : 'inbox'}?page=${page}&limit=${limit}`,
+    fetcher,
+    {
+      revalidateOnFocus: false,
+      dedupingInterval: 0,
+      suspense: false,
+      keepPreviousData: true,
+      onError: (err) => {
+        console.error('Fetch error:', err);
+      }
+    }
+  );
+
+  // Now define handleRefresh after useSWR
+  const handleRefresh = useCallback(async () => {
+    try {
+      await mutate();
+    } catch (error) {
+      console.error('Failed to refresh:', error);
+    }
+  }, [mutate]);
+
+  const memoizedValue = useMemo(() => {
+    const formattedEmails = (Array.isArray(emails) ? emails : [])
+      .map(formatEmail)
+      .filter(Boolean)
+      .sort((a, b) => new Date(b.date) - new Date(a.date));
+    return formattedEmails;
+  }, [emails]);
+
   const toggleEmailSelection = useCallback((emailId, e) => {
     e.preventDefault();
     setSelectedEmails(prev => 
@@ -330,46 +369,13 @@ const EmailList = ({ emails = [], type, selectedEmails = [], setSelectedEmails, 
     setSelectedEmail(null);
   }, []);
 
-  const { data, error, isLoading: fetchLoading, mutate } = useSWR( // renamed isLoading to fetchLoading
-    `/api/emails/${showAll ? 'all' : 'inbox'}?page=${page}&limit=${limit}`,
-    fetcher,
-    {
-      revalidateOnFocus: false,
-      dedupingInterval: 0,
-      suspense: false,
-      keepPreviousData: true,
-      onError: (err) => {
-        console.error('Fetch error:', err);
-      }
-    }
-  );
-
-  const formattedEmails = useMemo(() => 
-    (Array.isArray(emails) ? emails : [])
-      .map(formatEmail)
-      .filter(Boolean)
-      .sort((a, b) => new Date(b.date) - new Date(a.date)),
-    [emails]
-  );
+  useEffect(() => {
+    // Optionally refresh on mount
+    handleRefresh();
+  }, [handleRefresh]);
 
   const renderEmailItem = useCallback(({ index, style }) => {
-    const email = formattedEmails[index];
-    return (
-      <div style={style}>
-        <EmailItem
-          key={generateUniqueKey(email)}
-          email={email}
-          type={type}
-          selectedEmails={selectedEmails}
-          toggleEmailSelection={toggleEmailSelection}
-          toggleStar={toggleStar}
-          itemVariants={itemVariants}
-          onClick={handleEmailClick}
-          showAll={showAll}
-        />
-      </div>
-    );
-  }, [formattedEmails, type, selectedEmails, toggleEmailSelection, toggleStar, itemVariants, handleEmailClick, showAll]);
+  }, [memoizedValue, type, selectedEmails, toggleEmailSelection, toggleStar, itemVariants, handleEmailClick, showAll]);
 
   // Show loading state
   if (initialLoading || fetchLoading) {
@@ -407,7 +413,7 @@ const EmailList = ({ emails = [], type, selectedEmails = [], setSelectedEmails, 
           animate="show"
           className="divide-y divide-gray-100"
         >
-          {formattedEmails.slice(0, 10).map((email) => (
+          {memoizedValue.slice(0, 10).map((email) => (
             <EmailItem
               key={generateUniqueKey(email)}
               email={email}
@@ -435,7 +441,7 @@ const EmailList = ({ emails = [], type, selectedEmails = [], setSelectedEmails, 
               <List
                 height={height}
                 width={width}
-                itemCount={formattedEmails.length}
+                itemCount={memoizedValue.length}
                 itemSize={100} // Increased item size for better visibility
                 overscanCount={5}
                 className="divide-y divide-gray-100"
@@ -443,8 +449,8 @@ const EmailList = ({ emails = [], type, selectedEmails = [], setSelectedEmails, 
                 {({ index, style }) => (
                   <div style={{ ...style, width: '100%' }}>
                     <EmailItem
-                      key={generateUniqueKey(formattedEmails[index])}
-                      email={formattedEmails[index]}
+                      key={generateUniqueKey(memoizedValue[index])}
+                      email={memoizedValue[index]}
                       type={type}
                       selectedEmails={selectedEmails}
                       toggleEmailSelection={toggleEmailSelection}

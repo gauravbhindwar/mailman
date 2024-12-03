@@ -29,8 +29,9 @@ export default function ComposeEmail() {
 
     if (replyData) {
       try {
-        // Use atob to decode base64
-        const decoded = JSON.parse(atob(replyData));
+        // Properly decode base64 and handle special characters
+        const decodedStr = decodeURIComponent(escape(atob(replyData)));
+        const decoded = JSON.parse(decodedStr);
         setEmailData({
           to: decoded.to || '',
           subject: decoded.subject || '',
@@ -44,8 +45,9 @@ export default function ComposeEmail() {
 
     if (forwardData) {
       try {
-        // Use atob to decode base64
-        const decoded = JSON.parse(atob(forwardData));
+        // Properly decode base64 and handle special characters
+        const decodedStr = decodeURIComponent(escape(atob(forwardData)));
+        const decoded = JSON.parse(decodedStr);
         setEmailData({
           to: '', // Forward requires manual input of recipient
           subject: decoded.subject || '',
@@ -64,21 +66,31 @@ export default function ComposeEmail() {
     setIsSubmitting(true);
     
     try {
+      // Prepare email data with properly structured content
+      const emailRequest = {
+        from: { userId: session.user.id, email: session.user.email },
+        to: emailData.to,
+        subject: emailData.subject,
+        content: emailData.content,  // Send content directly as string
+      };
+
       const response = await fetch('/api/send-email', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          from: { userId: session.user.id, email: session.user.email }, // Use logged-in user's ID and email
-          ...emailData
-        })
+        body: JSON.stringify(emailRequest)
       });
 
       const data = await response.json();
 
       if (!response.ok) {
         throw new Error(data.error || 'Failed to send email');
+      }
+
+      // If there are attachments, handle them separately
+      if (attachments.length > 0) {
+        // ...attachment handling code...
       }
 
       router.push('/dashboard/sent');

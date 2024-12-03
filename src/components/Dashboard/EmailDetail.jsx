@@ -197,70 +197,135 @@ const AttachmentPreview = ({ attachment }) => (
   </div>
 );
 
+const extractContent = (message) => {
+  if (!message) return '';
+  
+  // If message is a string, return it directly
+  if (typeof message === 'string') return message;
+  
+  // If message has content property that's a string
+  if (typeof message.content === 'string') return message.content;
+  
+  // If message has content as an object
+  if (message.content?.html || message.content?.text) {
+    return message.content.html || message.content.text;
+  }
+  
+  // If message is already in html/text format
+  if (message.html || message.text) {
+    return message.html || message.text;
+  }
+  
+  // Try to get content from body
+  if (message.body) {
+    return typeof message.body === 'string' ? message.body : message.body.html || message.body.text || '';
+  }
+  
+  return '';
+};
+
 const MessageThread = ({ messages = [], participants = [] }) => (
-  <div className="space-y-6 p-6">
+  <div className="space-y-4 p-6">
     {Array.isArray(messages) && messages.length > 0 ? messages.map((message, index) => {
-      const messageContent = message?.content?.html || message?.content?.text || message.content || '';
+      const messageContent = extractContent(message);
       const sender = message.from || message.externalSender || 'Unknown Sender';
       const timestamp = message.date || message.createdAt || new Date();
       const attachments = Array.isArray(message.attachments) ? message.attachments : [];
 
       // Clean up email content
-      const cleanedContent = cleanEmailContent(messageContent);
+      const cleanedContent = sanitizeHtml(cleanEmailContent(messageContent));
       
       return (
         <div key={`message-${index}-${timestamp}`} 
-          className="bg-white rounded-lg shadow-sm transition-all duration-200"
+          className="bg-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
         >
-          {/* Sender Info */}
-          <div className="p-4 border-b border-gray-100">
-            <div className="flex items-center gap-4">
-              <div className="relative">
-                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-medium ring-2 ring-white shadow-lg">
+          {/* Gmail-like header */}
+          <div className="p-4 group">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-medium">
                   {(typeof sender === 'string' ? sender[0] : '?').toUpperCase()}
                 </div>
-                {attachments.length > 0 && (
-                  <div className="absolute -bottom-1 -right-1 bg-blue-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
-                    {attachments.length}
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-gray-900">{sender}</span>
+                    <span className="text-xs text-gray-500">
+                      {`<${message.from}>`}
+                    </span>
                   </div>
-                )}
-              </div>
-              <div className="flex-1">
-                <div className="flex items-center justify-between">
-                  <h3 className="font-medium text-gray-900">{sender}</h3>
-                  <span className="text-sm text-gray-500">
-                    {formatDistanceToNow(new Date(timestamp), { addSuffix: true })}
-                  </span>
+                  <div className="text-sm text-gray-600">
+                    to {message.to}
+                  </div>
                 </div>
-                {message.to && (
-                  <p className="text-sm text-gray-600">To: {message.to}</p>
-                )}
+              </div>
+              <div className="flex items-center gap-4">
+                <span className="text-sm text-gray-500">
+                  {formatDistanceToNow(new Date(timestamp), { addSuffix: true })}
+                </span>
+                <div className="hidden group-hover:flex items-center gap-2">
+                  <button className="p-2 hover:bg-gray-100 rounded-full">
+                    <MdStar className="w-5 h-5 text-gray-600" />
+                  </button>
+                  <button className="p-2 hover:bg-gray-100 rounded-full">
+                    <MdReply className="w-5 h-5 text-gray-600" />
+                  </button>
+                  <button className="p-2 hover:bg-gray-100 rounded-full">
+                    <MdMoreVert className="w-5 h-5 text-gray-600" />
+                  </button>
+                </div>
               </div>
             </div>
           </div>
 
-          {/* Message Content */}
-          <div className="px-4 py-6">
-            <div className="prose prose-slate max-w-none">
+          {/* Email content with Gmail-like styling */}
+          <div className="px-16 py-6">
+            <div className="prose prose-sm max-w-none">
               <div
-                className="message-content"
+                className="message-content text-gray-800"
                 dangerouslySetInnerHTML={{ 
-                  __html: sanitizeHtml(cleanedContent)
+                  __html: cleanedContent
                 }}
               />
             </div>
 
-            {/* Attachments */}
+            {/* Gmail-like attachments */}
             {attachments.length > 0 && (
-              <div className="mt-6 border-t pt-4">
-                <h4 className="text-sm font-medium text-gray-700 mb-2">Attachments</h4>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+              <div className="mt-6 border-t border-gray-100 pt-4">
+                <div className="text-sm font-medium text-gray-700 mb-3">
+                  {attachments.length} attachment{attachments.length > 1 ? 's' : ''}
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                   {attachments.map((attachment, i) => (
-                    <AttachmentPreview key={i} attachment={attachment} />
+                    <div 
+                      key={i}
+                      className="border border-gray-200 rounded-lg p-3 hover:shadow-md transition-shadow"
+                    >
+                      <div className="flex items-center gap-2">
+                        <MdAttachment className="w-5 h-5 text-gray-400" />
+                        <span className="text-sm font-medium text-gray-700 truncate">
+                          {attachment.filename}
+                        </span>
+                      </div>
+                      <div className="mt-2 flex items-center justify-between">
+                        <span className="text-xs text-gray-500">
+                          {Math.round(attachment.size / 1024)} KB
+                        </span>
+                        <button className="text-blue-600 text-sm hover:text-blue-700">
+                          Download
+                        </button>
+                      </div>
+                    </div>
                   ))}
                 </div>
               </div>
             )}
+          </div>
+
+          {/* Quick reply area (Gmail-like) */}
+          <div className="px-16 pb-6">
+            <div className="border rounded-xl p-4 hover:shadow-md transition-shadow cursor-text">
+              <div className="text-gray-600 text-sm">Click here to reply</div>
+            </div>
           </div>
         </div>
       );
@@ -272,45 +337,44 @@ const MessageThread = ({ messages = [], participants = [] }) => (
   </div>
 );
 
-const ReplyForm = ({ onSubmit, onCancel, initialContent = '', isForward = false }) => {
-  const [content, setContent] = useState(initialContent);
-  return (
-    <div className="border-t mt-4 p-4 bg-white">
-      <div className="mb-4 flex justify-between items-center">
-        <h3 className="font-medium">{isForward ? 'Forward Email' : 'Reply'}</h3>
-        <button 
-          onClick={onCancel}
-          className="text-gray-500 hover:text-gray-700"
-        >
-          <MdClose size={20} />
-        </button>
-      </div>
-      
-      <RichTextEditor
-        value={content}
-        onChange={setContent}
-        placeholder={isForward ? "Add a message (optional)" : "Type your reply..."}
-      />
-      <div className="mt-4 flex justify-end gap-2">
-        <button
-          onClick={onCancel}
-          className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded"
-        >
-          Cancel
-        </button>
-        <button
-          onClick={() => onSubmit(content)}
-          className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
-        >
-          {isForward ? 'Forward' : 'Send Reply'}
-        </button>
-      </div>
-    </div>
-  );
-};
-
+// Update EmailStyles with Gmail-like styling
 const EmailStyles = () => (
   <style jsx global>{`
+    .message-content {
+      font-family: 'Google Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      line-height: 1.6;
+      color: #202124;
+    }
+    
+    .message-content p {
+      margin: 1em 0;
+    }
+
+    .message-content a {
+      color: #1a73e8;
+      text-decoration: none;
+    }
+
+    .message-content a:hover {
+      text-decoration: underline;
+    }
+
+    .message-content blockquote {
+      margin: 1em 0;
+      padding-left: 1em;
+      border-left: 2px solid #dadce0;
+      color: #5f6368;
+    }
+
+    .forwarded-header {
+      color: #5f6368;
+      font-size: 0.875rem;
+      margin: 1em 0;
+      padding: 0.5em;
+      background: #f8f9fa;
+      border-radius: 4px;
+    }
+
     .message-content {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
       line-height: 1.6;
@@ -451,11 +515,9 @@ export default function EmailDetail({ email, onClose }) {
   // Format email data with comprehensive fallbacks
   const formattedEmail = {
     subject: email.subject || 'No Subject',
+    content: extractContent(email),
     messages: Array.isArray(email.messages) ? email.messages : [{
-      content: typeof email.content === 'object' ? email.content : {
-        html: email.content || '',
-        text: email.content || ''
-      },
+      content: extractContent(email),
       from: email.from,
       to: email.to,
       date: email.date,
@@ -485,9 +547,9 @@ export default function EmailDetail({ email, onClose }) {
       `.trim()
     };
     
-    // Use btoa for base64 encoding instead of URI encoding
-    const queryParams = btoa(JSON.stringify(replyData));
-    router.push(`/dashboard/compose?reply=${queryParams}`);
+    // Properly encode the data to base64
+    const encodedData = btoa(unescape(encodeURIComponent(JSON.stringify(replyData))));
+    router.push(`/dashboard/compose?reply=${encodedData}`);
     onClose();
   };
 
@@ -506,9 +568,9 @@ export default function EmailDetail({ email, onClose }) {
       `.trim()
     };
     
-    // Use btoa for base64 encoding
-    const queryParams = btoa(JSON.stringify(forwardData));
-    router.push(`/dashboard/compose?forward=${queryParams}`);
+    // Properly encode the data to base64
+    const encodedData = btoa(unescape(encodeURIComponent(JSON.stringify(forwardData))));
+    router.push(`/dashboard/compose?forward=${encodedData}`);
     onClose();
   };
 
