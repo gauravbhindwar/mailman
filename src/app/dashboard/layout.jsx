@@ -15,6 +15,7 @@ export default async function DashboardLayout({ children }) {
     { href: '/dashboard/trash', label: 'Trash', icon: 'Trash' },
     { href: '/dashboard/compose', label: 'Compose', icon: 'PencilSquare' },
     { href: '/dashboard/settings/email', label: 'Email Setup', icon: 'Cog6Tooth' },
+    { href: '/dashboard/all-emails', label: 'Show All Emails', icon: 'ExclamationCircle' } // Ensure this line is included
   ];
 
   return (

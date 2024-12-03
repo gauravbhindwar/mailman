@@ -11,8 +11,6 @@ import NodeCache from 'node-cache';
 import { cache, getCacheKey } from './cache';
 import { validateSMTPConfig } from './email-config';
 
-const ITEMS_PER_PAGE = 50; // Ensure consistent limit
-
 // Remove the local emailCache declaration since we're using the shared one
 
 // Initialize cache with 5 minute TTL
@@ -29,6 +27,38 @@ const GMAIL_IMAP_CONFIG = {
   authTimeout: 30000,
   connTimeout: 30000,
   tlsOptions: { rejectUnauthorized: false }
+};
+
+const SPECIAL_USE_ATTRIBUTES = {
+  '\\All': 'all',
+  '\\Drafts': 'drafts',
+  '\\Important': 'important',
+  '\\Sent': 'sent',
+  '\\Junk': 'spam',
+  '\\Flagged': 'starred',
+  '\\Trash': 'trash'
+};
+
+const getFolderMapping = (boxes) => {
+  const mapping = {};
+  const traverseBoxes = (box, path = '') => {
+    Object.keys(box).forEach((key) => {
+      const fullPath = path ? `${path}/${key}` : key;
+      const boxInfo = box[key];
+      if (boxInfo.children) {
+        traverseBoxes(boxInfo.children, fullPath);
+      } else {
+        const attributes = boxInfo.attribs || [];
+        attributes.forEach((attr) => {
+          if (SPECIAL_USE_ATTRIBUTES[attr]) {
+            mapping[SPECIAL_USE_ATTRIBUTES[attr]] = fullPath;
+          }
+        });
+      }
+    });
+  };
+  traverseBoxes(boxes);
+  return mapping;
 };
 
 // Email validation
@@ -290,6 +320,7 @@ const FOLDER_MAPPING = {
   'trash': '[Gmail]/Trash',
   'archive': '[Gmail]/All Mail',
   'starred': '[Gmail]/Starred',
+  'all': '[Gmail]/All Mail', // Add this line
   // Add mappings for other email providers
   'hotmail': {
     'sent': 'Sent',
@@ -305,7 +336,7 @@ const FOLDER_MAPPING = {
   }
 };
 
-export const fetchEmailsIMAP = async (user, folder = 'inbox', page = 1, limit = ITEMS_PER_PAGE) => {
+export const fetchEmailsIMAP = async (user, folder = 'inbox', page = 1, limit = 50) => {
   if (!user?.emailConfig) {
     throw new Error('Email configuration not found');
   }
@@ -361,50 +392,29 @@ export const fetchEmailsIMAP = async (user, folder = 'inbox', page = 1, limit = 
     return imapConnectionPool.get(poolKey);
   }
 
-  const fetchEmails = () => new Promise((resolve, reject) => {
+  const fetchEmails = (folderName) => new Promise((resolve, reject) => {
     const imap = new Imap(imapConfig);
     const emails = new Map(); // Use Map to track emails by seqno
 
     imap.once('ready', () => {
-      // Get folder mapping based on email provider
-      const provider = credentials.imap.user.toLowerCase().includes('gmail.com') ? 'gmail' :
-                      credentials.imap.user.toLowerCase().includes('hotmail.com') ? 'hotmail' :
-                      credentials.imap.user.toLowerCase().includes('yahoo.com') ? 'yahoo' : 'gmail';
-      
-      const folderMap = typeof FOLDER_MAPPING[provider] === 'object' ? 
-                       FOLDER_MAPPING[provider][folder] || folder.toUpperCase() :
-                       FOLDER_MAPPING[folder] || folder.toUpperCase();
-
-      imap.openBox(folderMap, false, async (err, box) => {
+      imap.openBox(folderName, false, async (err, box) => {
         if (err) {
-          console.error(`Error opening folder ${folderMap}:`, err);
+          console.error(`Error opening folder ${folderName}:`, err);
           imap.end();
           return reject(err);
         }
 
         const total = box.messages.total;
-        const pageSize = limit;
-        // Update pagination calculation
-        const startSeqno = Math.max(1, total - (page * pageSize) + 1);
-        const endSeqno = Math.min(total, total - ((page - 1) * pageSize));
+        const startSeqno = 1;
+        const endSeqno = total;
 
         if (total === 0) {
           imap.end();
-          return resolve({
-            success: true,
-            emails: [],
-            pagination: {
-              total: 0,
-              pages: 0,
-              current: page,
-              hasMore: false
-            }
-          });
+          return resolve([]);
         }
 
-        console.log(`📨 Fetching ${folder} emails ${startSeqno}:${endSeqno} (page ${page}/${Math.ceil(total/pageSize)})`);
+        console.log(`📨 Fetching all emails from ${folderName} ${startSeqno}:${endSeqno}`);
 
-        // Update fetch range
         const fetch = imap.seq.fetch(`${startSeqno}:${endSeqno}`, {
           bodies: '',
           struct: true,
@@ -447,17 +457,7 @@ export const fetchEmailsIMAP = async (user, folder = 'inbox', page = 1, limit = 
             .map(email => email.parsed)
             .sort((a, b) => new Date(b.date) - new Date(a.date));
 
-          resolve({
-            success: true,
-            emails: processedEmails,
-            pagination: {
-              total,
-              pages: Math.ceil(total / pageSize),
-              current: page,
-              hasMore: endSeqno < total,
-              totalEmails: total
-            }
-          });
+          resolve(processedEmails);
         });
       });
     });
@@ -485,10 +485,65 @@ export const fetchEmailsIMAP = async (user, folder = 'inbox', page = 1, limit = 
   });
 
   try {
-    const result = await retryWithDelay(() => fetchEmails());
+    const imap = new Imap(imapConfig);
+    const folderMapping = await new Promise((resolve, reject) => {
+      imap.once('ready', () => {
+        imap.getBoxes((err, boxes) => {
+          if (err) {
+            console.error('Error fetching folders:', err);
+            imap.end();
+            return reject(err);
+          }
+          resolve(getFolderMapping(boxes));
+        });
+      });
+
+      imap.once('error', (err) => {
+        console.error('IMAP error:', {
+          message: err.message,
+          source: err.source,
+          type: err.type,
+          code: err.code
+        });
+        reject(err);
+      });
+
+      imap.once('end', () => {
+        console.log('IMAP connection ended');
+      });
+
+      try {
+        imap.connect();
+      } catch (err) {
+        console.error('IMAP connect error:', err);
+        reject(err);
+      }
+    });
+
+    const allEmails = [];
+    for (const folderName of Object.values(folderMapping)) {
+      const emails = await fetchEmails(folderName);
+      allEmails.push(...emails);
+    }
+
+    // Sort all emails by date
+    allEmails.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    // Handle pagination after fetching all emails
+    const startIdx = (page - 1) * limit;
+    const endIdx = startIdx + limit;
+    const paginatedEmails = allEmails.slice(startIdx, endIdx);
+
     return {
-      ...result,
-      cached: false
+      success: true,
+      emails: paginatedEmails,
+      pagination: {
+        total: allEmails.length,
+        pages: Math.ceil(allEmails.length / limit),
+        current: page,
+        hasMore: endIdx < allEmails.length,
+        totalEmails: allEmails.length
+      }
     };
   } catch (error) {
     console.error('IMAP Authentication Error:', {
@@ -511,6 +566,45 @@ export const fetchEmailsIMAP = async (user, folder = 'inbox', page = 1, limit = 
       }
     };
   }
+};
+
+const FOLDERS = ['inbox', 'sent', 'drafts', 'spam', 'trash', 'archive', 'starred'];
+
+export const fetchAllEmails = async (user, page = 1, limit = 50) => {
+  if (!user?.emailConfig) {
+    throw new Error('Email configuration not found');
+  }
+
+  const credentials = user.getEmailCredentials();
+  if (!credentials?.imap) {
+    throw new Error('IMAP credentials not found');
+  }
+
+  const allEmails = [];
+  for (const folder of FOLDERS) {
+    const result = await fetchEmailsIMAP(user, folder, 1, 0); // Fetch all emails from each folder
+    allEmails.push(...result.emails);
+  }
+
+  // Sort all emails by date
+  allEmails.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  // Handle pagination after fetching all emails
+  const startIdx = (page - 1) * limit;
+  const endIdx = startIdx + limit;
+  const paginatedEmails = allEmails.slice(startIdx, endIdx);
+
+  return {
+    success: true,
+    emails: paginatedEmails,
+    pagination: {
+      total: allEmails.length,
+      pages: Math.ceil(allEmails.length / limit),
+      current: page,
+      hasMore: endIdx < allEmails.length,
+      totalEmails: allEmails.length
+    }
+  };
 };
 
 // Email CRUD operations

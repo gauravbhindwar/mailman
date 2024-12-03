@@ -1,6 +1,6 @@
 "use client"
 import Link from 'next/link';
-import { useEffect, useState, Suspense } from 'react';
+import { useEffect, useState, Suspense, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import EmailList from './EmailList';
 import { useSession } from "next-auth/react";
@@ -219,42 +219,49 @@ function PaginationBar({ currentPage, totalPages, onPageChange }) {
   );
 }
 
-function InboxEmailList({ userId, page, setPage }) {
+function InboxEmailList({ userId, page, setPage, showAll }) {
   const [selectedEmails, setSelectedEmails] = useState([]);
-  const folder = 'inbox'; // Add this line to define the folder
+  const folder = showAll ? 'all' : 'inbox';
+  const limit = 50; // emails per page
   
   const { data, error, isLoading, mutate } = useSWR(
-    `/api/emails/${folder}?page=${page}&limit=50&refresh=true`, // Update URL to use new API route
+    `/api/emails/${folder}?page=${page}&limit=${limit}`,
     fetcher,
     {
       revalidateOnFocus: false,
       revalidateOnReconnect: false,
-      dedupingInterval: 30000, // Increase to 30 seconds
-      refreshInterval: 60000, // Increase to 1 minute
-      onErrorRetry: (error, key, config, revalidate, { retryCount }) => {
-        // Only retry up to 3 times and not for 404s
-        if (retryCount >= 3 || error.status === 404) return;
-        setTimeout(() => revalidate({ retryCount: retryCount + 1 }), 5000);
-      },
+      dedupingInterval: 30000,
+      refreshInterval: 0,
+      refreshWhenHidden: false,
+      refreshWhenOffline: false,
+      shouldRetryOnError: true,
+      onError: (err) => {
+        console.error('Fetch error:', err);
+      }
     }
   );
 
-  const handleRefresh = async () => {
+  const handleRefresh = useCallback(async () => {
     try {
-      await mutate();
+      await mutate(
+        `/api/emails/${folder}?page=${page}&limit=${limit}&timestamp=${Date.now()}`,
+        { revalidate: true }
+      );
     } catch (err) {
       console.error('Refresh failed:', err);
     }
-  };
+  }, [mutate, folder, page, limit]);
 
   useEffect(() => {
-    // Only refresh if we have data and no explicit error
+    handleRefresh();
+  }, [page]);
+
+  useEffect(() => {
     if (data?.success === false && !data?.error) {
       handleRefresh();
     }
   }, [data]);
 
-  // Show loading state
   if (isLoading) {
     return (
       <motion.div 
@@ -267,7 +274,18 @@ function InboxEmailList({ userId, page, setPage }) {
     );
   }
 
-  // Show configuration banner if not configured
+  if (error) {
+    return (
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        className="text-center py-8 text-gray-500"
+      >
+        <p>Error loading emails: {error.message}</p>
+      </motion.div>
+    );
+  }
+
   if (data?.error === 'EMAIL_NOT_CONFIGURED') {
     return <SetupEmailBanner />;
   }
@@ -298,35 +316,35 @@ function InboxEmailList({ userId, page, setPage }) {
         onPageChange={setPage}
       />
       
-      <div className="flex-1 relative">
-        <div className="absolute inset-0 overflow-auto">
-          <motion.div
-            variants={listVariants}
-            initial="hidden"
-            animate="visible"
-          >
-            <AnimatePresence>
-              {emails.length > 0 ? (
-                <EmailList 
-                  emails={emails} 
-                  type="inbox"
-                  selectedEmails={selectedEmails}
-                  setSelectedEmails={setSelectedEmails}
-                  itemVariants={itemVariants}
-                />
-              ) : (
-                <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="text-center py-8 text-gray-500"
-                >
-                  <p>No emails found</p>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </motion.div>
-        </div>
+      <div className="flex-1 relative overflow-auto">
+        <motion.div
+          variants={listVariants}
+          initial="hidden"
+          animate="visible"
+          className="h-full"
+        >
+          <AnimatePresence>
+            {emails.length > 0 ? (
+              <EmailList 
+                emails={emails} 
+                type="inbox"
+                selectedEmails={selectedEmails}
+                setSelectedEmails={setSelectedEmails}
+                itemVariants={itemVariants}
+                showAll={showAll} // Pass showAll prop
+              />
+            ) : (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="text-center py-8 text-gray-500"
+              >
+                <p>No emails found</p>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </motion.div>
       </div>
     </div>
   );
@@ -336,6 +354,7 @@ export default function InboxPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const [page, setPage] = useState(1);
+  const [showAll, setShowAll] = useState(false);
 
   useEffect(() => {
     if (status === "unauthenticated") {
@@ -386,7 +405,7 @@ export default function InboxPage() {
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
           </motion.div>
         }>
-          <InboxEmailList userId={session.user.id} page={page} setPage={setPage} />
+          <InboxEmailList userId={session.user.id} page={page} setPage={setPage} showAll={showAll} />
         </Suspense>
       </div>
     </div>

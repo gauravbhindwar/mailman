@@ -29,7 +29,15 @@ const modalAnimation = {
   }
 };
 
-const MessageThread = ({ messages, participants }) => {
+const MessageThread = ({ messages = [], participants = [] }) => {
+  if (!messages || messages.length === 0) {
+    return (
+      <div className="p-4 text-gray-500 text-center">
+        No messages to display
+      </div>
+    );
+  }
+
   return (
     <motion.div 
       className="space-y-6 p-4"
@@ -37,37 +45,46 @@ const MessageThread = ({ messages, participants }) => {
       animate={{ opacity: 1 }}
       transition={{ staggerChildren: 0.1 }}
     >
-      {messages.map((message, index) => (
-        <motion.div
-          key={`${message.id || message._id || message.externalId || Date.now()}-${message.createdAt}`}
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: index * 0.1 }}
-          className="bg-white rounded-lg shadow-sm p-4 hover:shadow-md transition-shadow duration-200"
-        >
-          <div className="flex items-center gap-3 mb-2">
-            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white ${
-              message.externalSender ? 'bg-purple-500' : 'bg-blue-500'
-            }`}>
-              {message.externalSender ? 
-                message.externalSender[0].toUpperCase() :
-                participants.find(p => p.id === message.from?.id)?.name[0]
-              }
-            </div>
-            <div>
-              <div className="font-medium">
-                {message.externalSender || 
-                  participants.find(p => p.id === message.from?.id)?.name
-                }
+      {messages.map((message, index) => {
+        if (!message) return null;
+        
+        const messageKey = `${message.id || message._id || message.externalId || Date.now()}-${index}`;
+        const senderName = message.externalSender || 
+          participants?.find(p => p?.id === message?.from?.id)?.name || 
+          'Unknown Sender';
+        const senderInitial = (senderName?.[0] || '?').toUpperCase();
+        
+        return (
+          <motion.div
+            key={messageKey}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: index * 0.1 }}
+            className="bg-white rounded-lg shadow-sm p-4 hover:shadow-md transition-shadow duration-200"
+          >
+            <div className="flex items-center gap-3 mb-2">
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white ${
+                message.externalSender ? 'bg-purple-500' : 'bg-blue-500'
+              }`}>
+                {senderInitial}
               </div>
-              <div className="text-xs text-gray-500">
-                {formatDistanceToNow(new Date(message.createdAt), { addSuffix: true })}
+              <div>
+                <div className="font-medium">{senderName}</div>
+                <div className="text-xs text-gray-500">
+                  {formatDistanceToNow(new Date(message.createdAt || Date.now()), { addSuffix: true })}
+                </div>
               </div>
             </div>
-          </div>
-          <div className="pl-11" dangerouslySetInnerHTML={{ __html: message.content }} />
-        </motion.div>
-      ))}
+            <div className="pl-11">
+              {message.content ? (
+                <div dangerouslySetInnerHTML={{ __html: message.content }} />
+              ) : (
+                <p className="text-gray-500 italic">No content</p>
+              )}
+            </div>
+          </motion.div>
+        );
+      })}
     </motion.div>
   );
 };
@@ -115,6 +132,43 @@ export default function EmailDetail({ email, onClose }) {
   const router = useRouter();
   const [isReplying, setIsReplying] = useState(false);
   const [isForwarding, setIsForwarding] = useState(false);
+
+  if (!email) return null;
+
+  // Get sender info first
+  const sender = getSenderInfo();
+
+  // Then use sender info in messages
+  const messages = email?.messages || [{ 
+    content: email?.content || 'No content available',
+    createdAt: email?.date || new Date(),
+    externalSender: sender?.email
+  }];
+
+  const participants = email?.participants || [];
+
+  // Move getSenderInfo function definition before its usage
+  function getSenderInfo() {
+    if (email.from) {
+      return {
+        name: email.from.split('@')[0],
+        email: email.from
+      };
+    }
+    const sender = email.participants?.[0] || { name: 'Unknown', email: 'unknown@example.com' };
+    return {
+      name: sender.name || sender.email?.split('@')[0] || 'Unknown',
+      email: sender.email || 'unknown@example.com'
+    };
+  }
+
+  const getFormattedDate = (dateStr) => {
+    try {
+      return formatDistanceToNow(new Date(dateStr), { addSuffix: true });
+    } catch (error) {
+      return 'Unknown date';
+    }
+  };
 
   const handleReply = () => {
     const replyData = {
@@ -197,7 +251,7 @@ export default function EmailDetail({ email, onClose }) {
 
         {/* Message Thread */}
         <div className="overflow-y-auto max-h-[calc(90vh-200px)]">
-          <MessageThread messages={email.messages} participants={email.participants} />
+          <MessageThread messages={messages} participants={participants} />
         </div>
 
         {/* Reply/Forward Forms */}

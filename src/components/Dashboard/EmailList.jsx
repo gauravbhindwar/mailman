@@ -1,6 +1,6 @@
 "use client"
-import React, { useState, useCallback, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useState, useCallback } from 'react';
+import { motion } from 'framer-motion';
 import Link from 'next/link';
 import { MdStar, MdStarBorder, MdCheckBox, MdCheckBoxOutlineBlank, MdArchive, MdDelete } from 'react-icons/md';
 import { formatDistanceToNow } from 'date-fns';
@@ -35,17 +35,50 @@ const getRandomColor = (str) => {
 const getSenderInfo = (email, type) => {
   if (!email) return { name: 'Unknown', email: 'unknown@example.com' };
 
-  if (type === 'inbox') {
-    if (email.messages?.[0]?.externalSender) {
-      const sender = email.messages[0].externalSender;
+  // For IMAP ENVELOPE format (e.g., Google notifications)
+  if (email.envelope) {
+    const sender = email.envelope.from?.[0];
+    if (sender) {
       return {
-        name: sender.split('@')[0],
-        email: sender
+        name: sender.name || sender.mailbox || email.from,
+        email: sender.mailbox ? `${sender.mailbox}@${sender.host}` : email.from
       };
     }
-    return email.participants?.[0] || { name: 'Unknown', email: 'unknown@example.com' };
   }
-  return email.participants?.[1] || { name: email.toEmail, email: email.toEmail };
+
+  // For emails from external sources
+  if (email.from) {
+    // Parse the 'From' field which might be in format: "name" <email> or name <email>
+    const matches = email.from.match(/(?:"?([^"]*)"?\s*)?(?:<(.+)>|\((.+)\))?/);
+    if (matches) {
+      const [_, name, email1, email2] = matches;
+      const displayName = name?.trim() || email2?.trim();
+      const emailAddress = (email1 || email2 || email.from)?.trim();
+
+      if (displayName && emailAddress) {
+        return {
+          name: displayName.replace(/^"(.*)"$/, '$1'), // Remove quotes if present
+          email: emailAddress.replace(/[<>]/g, '') // Remove angle brackets if present
+        };
+      }
+    }
+  }
+
+  // For Gmail-specific formats
+  if (email.headers && email.headers['x-gmail-from']) {
+    const gmailFrom = email.headers['x-gmail-from'];
+    const [name, address] = gmailFrom.split('<').map(part => part.replace(/[<>]/g, '').trim());
+    if (name && address) {
+      return { name, email: address };
+    }
+  }
+
+  // Fallback to simple email parsing
+  const emailParts = (email.from || '').split('@');
+  return {
+    name: emailParts[0] || 'Unknown',
+    email: email.from || 'unknown@example.com'
+  };
 };
 
 const listAnimation = {
@@ -63,7 +96,37 @@ const itemAnimation = {
   show: { opacity: 1, x: 0 }
 };
 
-const EmailItem = React.memo(function EmailItem({ email, type, selectedEmails, toggleEmailSelection, toggleStar, itemVariants, onClick }) {
+const getMessageTag = (email, type) => {
+  if (email.status) return email.status;
+  if (type === 'inbox' && email.messages?.[0]?.externalSender) return 'received';
+  if (type === 'sent') return 'sent';
+  if (email.flags?.includes('\\Draft')) return 'draft';
+  if (email.labels?.includes('\\Spam')) return 'spam';
+  if (email.labels?.includes('\\Trash')) return 'trash';
+  if (email.labels?.includes('\\Starred')) return 'starred';
+  return 'inbox';
+};
+
+const TagBadge = ({ tag }) => {
+  const tagColors = {
+    received: 'bg-blue-100 text-blue-800 border border-blue-200',
+    sent: 'bg-green-100 text-green-800 border border-green-200',
+    draft: 'bg-yellow-100 text-yellow-800 border border-yellow-200',
+    spam: 'bg-red-100 text-red-800 border border-red-200',
+    trash: 'bg-gray-100 text-gray-800 border border-gray-200',
+    starred: 'bg-purple-100 text-purple-800 border border-purple-200',
+    inbox: 'bg-indigo-100 text-indigo-800 border border-indigo-200',
+    archived: 'bg-gray-100 text-gray-800 border border-gray-200'
+  };
+
+  return (
+    <span className={`text-xs px-2 py-0.5 rounded-full ${tagColors[tag] || tagColors.inbox}`}>
+      {tag.charAt(0).toUpperCase() + tag.slice(1)}
+    </span>
+  );
+};
+
+const EmailItem = React.memo(function EmailItem({ email, type, selectedEmails, toggleEmailSelection, toggleStar, itemVariants, onClick, showAll }) {
   const sender = getSenderInfo(email, type);
   const lastMessage = email.messages?.[email.messages.length - 1] || {};
   const messageDate = email.lastMessageAt || email.date;
@@ -150,24 +213,35 @@ const EmailItem = React.memo(function EmailItem({ email, type, selectedEmails, t
         {/* Email Content with improved layout */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-2">
+                <motion.span 
+                  className={`font-medium ${!email.read ? 'font-semibold' : ''}`}
+                  whileHover={{ scale: 1.02 }}
+                >
+                  {sender.name}
+                </motion.span>
+                <TagBadge tag={getMessageTag(email, type)} />
+              </div>
+              <motion.span 
+                className="text-xs text-gray-500"
+                whileHover={{ scale: 1.02 }}
+              >
+                {sender.email}
+              </motion.span>
+            </div>
             <motion.span 
-              className={`font-medium ${!email.read ? 'font-semibold' : ''}`}
-              whileHover={{ scale: 1.02 }}
-            >
-              {sender.name}
-            </motion.span>
-            <motion.span 
-              className="text-sm text-gray-500"
+              className="text-sm text-gray-500 ml-2 whitespace-nowrap"
               whileHover={{ scale: 1.02 }}
             >
               {messageDate ? getFormattedDate(messageDate) : 'Unknown date'}
             </motion.span>
           </div>
-          <h3 className="text-sm font-medium text-gray-800 mb-1">
-            {email.subject}
+          <h3 className="text-sm font-medium text-gray-800 mb-1 truncate">
+            {email.subject || '(No Subject)'}
           </h3>
-          <p className="text-sm text-gray-500 truncate">
-            {getPreviewText(lastMessage.content)}...
+          <p className="text-sm text-gray-500 line-clamp-2 overflow-hidden">
+            {getPreviewText(lastMessage.content)}
           </p>
         </div>
 
@@ -197,7 +271,14 @@ const EmailItem = React.memo(function EmailItem({ email, type, selectedEmails, t
   );
 });
 
-const EmailList = ({ emails, type, selectedEmails, setSelectedEmails, itemVariants }) => {
+const generateUniqueKey = (email) => {
+  const baseId = email.id || email.messageId || email.uid;
+  const timestamp = email.date || email.lastMessageAt || Date.now();
+  const randomSuffix = Math.random().toString(36).substring(7);
+  return `${baseId}-${timestamp}-${randomSuffix}`;
+};
+
+const EmailList = ({ emails, type, selectedEmails, setSelectedEmails, itemVariants, showAll }) => {
   const [selectedEmail, setSelectedEmail] = useState(null);
   
   const toggleEmailSelection = useCallback((emailId, e) => {
@@ -216,6 +297,13 @@ const EmailList = ({ emails, type, selectedEmails, setSelectedEmails, itemVarian
     e.preventDefault();
     setSelectedEmail(email);
   }, []);
+
+  // Sort emails by date (latest first)
+  const sortedEmails = [...emails].sort((a, b) => {
+    const dateA = new Date(a.date || a.lastMessageAt || 0);
+    const dateB = new Date(b.date || b.lastMessageAt || 0);
+    return dateB - dateA;
+  });
 
   if (!Array.isArray(emails) || emails.length === 0) {
     return (
@@ -238,9 +326,9 @@ const EmailList = ({ emails, type, selectedEmails, setSelectedEmails, itemVarian
         animate="show"
         className="divide-y divide-gray-100"
       >
-        {emails.map((email) => (
+        {sortedEmails.map((email) => (
           <EmailItem
-            key={email.id || email.messageId || email.uid || Math.random().toString()}
+            key={generateUniqueKey(email)}
             email={email}
             type={type}
             selectedEmails={selectedEmails}
@@ -248,6 +336,7 @@ const EmailList = ({ emails, type, selectedEmails, setSelectedEmails, itemVarian
             toggleStar={toggleStar}
             itemVariants={itemVariants}
             onClick={handleEmailClick}
+            showAll={showAll} // Pass showAll prop
           />
         ))}
       </motion.div>

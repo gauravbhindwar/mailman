@@ -1,3 +1,4 @@
+
 "use client"
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
@@ -13,13 +14,12 @@ const fetcher = async (url) => {
   return res.json();
 };
 
-function FolderEmails({ userId, folder, page, setPage, showAll }) {
+function AllEmails({ userId, page, setPage }) {
   const [selectedEmails, setSelectedEmails] = useState([]);
   const limit = 50;
-  const apiFolder = showAll ? 'all' : folder;
 
   const { data, error, isLoading, mutate } = useSWR(
-    `/api/emails/${apiFolder}?page=${page}&limit=${limit}`,
+    `/api/emails/all?page=${page}&limit=${limit}`,
     fetcher,
     {
       revalidateOnFocus: false,
@@ -38,13 +38,13 @@ function FolderEmails({ userId, folder, page, setPage, showAll }) {
   const handleRefresh = useCallback(async () => {
     try {
       await mutate(
-        `/api/emails/${apiFolder}?page=${page}&limit=${limit}&timestamp=${Date.now()}`,
+        `/api/emails/all?page=${page}&limit=${limit}&timestamp=${Date.now()}`,
         { revalidate: true }
       );
     } catch (err) {
       console.error('Refresh failed:', err);
     }
-  }, [mutate, apiFolder, page, limit]);
+  }, [mutate, page, limit]);
 
   useEffect(() => {
     handleRefresh();
@@ -58,6 +58,18 @@ function FolderEmails({ userId, folder, page, setPage, showAll }) {
         className="flex justify-center items-center h-64"
       >
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+      </motion.div>
+    );
+  }
+
+  if (error) {
+    return (
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        className="text-center py-8 text-gray-500"
+      >
+        <p>Error loading emails: {error.message}</p>
       </motion.div>
     );
   }
@@ -89,7 +101,7 @@ function FolderEmails({ userId, folder, page, setPage, showAll }) {
   return (
     <EmailList 
       emails={emails}
-      type={folder}
+      type="all"
       selectedEmails={selectedEmails}
       setSelectedEmails={setSelectedEmails}
       handleRefresh={handleRefresh}
@@ -100,11 +112,10 @@ function FolderEmails({ userId, folder, page, setPage, showAll }) {
   );
 }
 
-export default function FolderView({ folder, title }) {
+export default function AllEmailsPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const [page, setPage] = useState(1);
-  const [showAll, setShowAll] = useState(false);
 
   useEffect(() => {
     if (status === "unauthenticated") {
@@ -131,7 +142,7 @@ export default function FolderView({ folder, title }) {
         animate={{ y: 0, opacity: 1 }}
         className="flex justify-between items-center p-4 border-b bg-white"
       >
-        <h2 className="text-xl font-bold">{title}</h2>
+        <h2 className="text-xl font-bold">All Emails</h2>
         <Link 
           href="/dashboard/compose" 
           className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
@@ -150,13 +161,7 @@ export default function FolderView({ folder, title }) {
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
           </motion.div>
         }>
-          <FolderEmails 
-            userId={session.user.id} 
-            folder={folder}
-            page={page} 
-            setPage={setPage}
-            showAll={showAll}
-          />
+          <AllEmails userId={session.user.id} page={page} setPage={setPage} />
         </Suspense>
       </div>
     </div>
