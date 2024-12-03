@@ -297,7 +297,7 @@ const generateUniqueKey = (email) => {
   return `${baseId}-${timestamp}-${randomSuffix}`;
 };
 
-const EmailList = ({ emails, type, selectedEmails, setSelectedEmails, itemVariants, showAll, page, limit }) => {
+const EmailList = ({ emails = [], type, selectedEmails = [], setSelectedEmails, itemVariants, showAll, page, limit }) => {
   const [isClient, setIsClient] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true); // renamed from isLoading
 
@@ -345,10 +345,10 @@ const EmailList = ({ emails, type, selectedEmails, setSelectedEmails, itemVarian
   );
 
   const formattedEmails = useMemo(() => 
-    (emails || [])
+    (Array.isArray(emails) ? emails : [])
       .map(formatEmail)
       .filter(Boolean)
-      .sort((a, b) => b.date - a.date),
+      .sort((a, b) => new Date(b.date) - new Date(a.date)),
     [emails]
   );
 

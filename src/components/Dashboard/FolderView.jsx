@@ -51,39 +51,15 @@ function FolderEmails({ userId, folder, page, setPage, showAll }) {
   }, [page]);
 
   if (isLoading) {
-    return (
-      <motion.div 
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        className="flex justify-center items-center h-64"
-      >
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
-      </motion.div>
-    );
+    return <div>Loading...</div>;
   }
 
   if (data?.error === 'EMAIL_NOT_CONFIGURED') {
-    return (
-      <motion.div 
-        initial={{ opacity: 0, y: -20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="p-4 mb-4 bg-white border rounded-lg shadow-sm"
-      >
-        <h3 className="text-lg font-medium text-gray-900">Setup Required</h3>
-        <p className="mt-1 text-gray-600">
-          Please configure your email settings to view emails.
-        </p>
-        <Link
-          href="/dashboard/settings/email"
-          className="mt-3 inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
-        >
-          Configure Email Settings
-        </Link>
-      </motion.div>
-    );
+    return <div>Email not configured</div>;
   }
 
-  const emails = data?.emails || [];
+  // Add safety check for emails
+  const emails = Array.isArray(data?.emails) ? data.emails : [];
   const totalPages = data?.pagination?.pages || 1;
 
   return (
@@ -94,7 +70,7 @@ function FolderEmails({ userId, folder, page, setPage, showAll }) {
       setSelectedEmails={setSelectedEmails}
       handleRefresh={handleRefresh}
       page={page}
-      totalPages={data?.pagination?.pages || 1}
+      totalPages={totalPages}
       onPageChange={setPage}
     />
   );
