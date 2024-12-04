@@ -10,15 +10,20 @@ function TextEditor({ value, onChange, placeholder }) {
       transition={{ duration: 0.3 }}
       className="h-full relative group"
     >
-      <textarea
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="w-full h-full p-8 resize-none bg-transparent rounded-xl
+      <div 
+        contentEditable
+        onInput={(e) => {
+          const content = e.currentTarget.textContent;
+          onChange(content);
+        }}
+        suppressContentEditableWarning={true}
+        className="w-full h-full p-8 whitespace-pre-wrap break-words bg-transparent rounded-xl
           focus:outline-none focus:ring-1 focus:ring-blue-200
           placeholder:text-gray-300 text-gray-700 text-lg leading-relaxed
-          transition-all duration-200"
-      />
+          transition-all duration-200 overflow-auto"
+      >
+        {value}
+      </div>
       <motion.div 
         className="absolute bottom-6 right-6 px-4 py-2 
           backdrop-blur-md bg-white/30 rounded-full shadow-sm 
