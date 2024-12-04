@@ -42,19 +42,30 @@ const parseEmailContent = async (content) => {
   }
 };
 
+const CACHE_TTL = 30; // 30 seconds
+const REQUEST_TIMEOUT = 25000; // 25 seconds
+
 export async function GET(req, context) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+
   try {
-    // Properly await the params object
-    const { folder } = await context.params;
-    
-    // Early validation
-    const validFolders = ['inbox', 'sent', 'drafts', 'spam', 'trash', 'archive', 'starred', 'all'];
-    if (!folder || !validFolders.includes(folder.toLowerCase())) {
-      return NextResponse.json(
-        { error: "Invalid folder specified" }, 
-        { status: 400 }
-      );
-    }
+    // Add timeout for the entire request
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Request timeout')), 30000);
+    });
+
+    const resultPromise = (async () => {
+      const { folder } = context.params;
+      
+      // Early validation
+      const validFolders = ['inbox', 'sent', 'drafts', 'spam', 'trash', 'archive', 'starred', 'all'];
+      if (!folder || !validFolders.includes(folder.toLowerCase())) {
+        return NextResponse.json(
+          { error: "Invalid folder specified" }, 
+          { status: 400 }
+        );
+      }
 
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) {
@@ -150,11 +161,31 @@ export async function GET(req, context) {
 
     return NextResponse.json(response);
 
+  })(); // Add missing closing parenthesis and curly brace
+
   } catch (error) {
-    console.error('❌ Email API error:', error);
-    return NextResponse.json(
-      { error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
+    clearTimeout(timeoutId);
+    
+    if (error.name === 'AbortError' || error.message.includes('timeout')) {
+      return NextResponse.json({ 
+        error: 'Request timed out',
+        retryAfter: 5
+      }, { status: 504 });
+    }
+
+    console.error('Email API Error:', {
+      message: error.message,
+      stack: error.stack,
+      name: error.name
+    });
+
+    // Return more detailed error for debugging
+    return NextResponse.json({
+      error: 'Failed to fetch emails',
+      details: error.message,
+      code: error.code || 'UNKNOWN_ERROR'
+    }, { 
+      status: error.message === 'EMAIL_NOT_CONFIGURED' ? 400 : 500 
+    });
   }
 }

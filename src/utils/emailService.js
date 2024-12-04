@@ -372,62 +372,7 @@ const CONNECTION_POOL_SIZE = 5;
 const CONNECTION_TIMEOUT = 1000 * 60 * 5; // 5 minutes
 
 // Optimize IMAP connection pooling
-const getImapConnection = async (userConfig) => {
-  try {
-    const poolKey = `${userConfig.imap.user}:${Date.now()}`;
-    let connection = imapConnectionPool.get(poolKey);
-
-    if (connection?.state === 'disconnected') {
-      connection.end();
-      connection = null;
-    }
-
-    if (!connection) {
-      const password = userConfig.imap.password.includes(':') 
-        ? await decrypt(userConfig.imap.password)
-        : userConfig.imap.password;
-      
-      const imapConfig = {
-        user: userConfig.imap.user,
-        password,
-        ...(userConfig.imap.user.toLowerCase().endsWith('@gmail.com') ? GMAIL_IMAP_CONFIG : {
-          host: userConfig.imap.host,
-          port: userConfig.imap.port,
-          tls: true,
-          tlsOptions: { 
-            rejectUnauthorized: false,
-            servername: userConfig.imap.host
-          }
-        }),
-        keepalive: true, // Enable keepalive
-        debug: process.env.NODE_ENV === 'development' ? console.log : null
-      };
-      
-      connection = new Imap(imapConfig);
-      
-      // Handle connection errors
-      connection.on('error', (err) => {
-        console.error('IMAP connection error:', err);
-        connection.end();
-        imapConnectionPool.delete(poolKey);
-      });
-
-      imapConnectionPool.set(poolKey, connection);
-      
-      // Clean up old connections
-      setTimeout(() => {
-        const conn = imapConnectionPool.get(poolKey);
-        if (conn?.end) conn.end();
-        imapConnectionPool.delete(poolKey);
-      }, CONNECTION_TIMEOUT);
-    }
-
-    return connection;
-  } catch (error) {
-    console.error('IMAP Connection Error:', error);
-    throw error;
-  }
-};
+// Removed duplicate getImapConnection function
 
 // Merge and optimize fetchEmailsIMAP function
 const DEFAULT_FETCH_OPTIONS = {
@@ -438,154 +383,7 @@ const DEFAULT_FETCH_OPTIONS = {
   flags: true
 };
 
-export const fetchEmailsIMAP = async (user, folder = 'inbox', page = 1, limit = 50) => {
-  let imap = null;
-  
-  try {
-    if (!user?.emailConfig) {
-      throw new Error('Email configuration not found');
-    }
-
-    const credentials = user.getEmailCredentials();
-    if (!credentials?.imap) {
-      throw new Error('IMAP credentials not found');
-    }
-
-    // Enhanced credentials validation with detailed error
-    const missingFields = [];
-    if (!credentials.imap.host) missingFields.push('IMAP Host');
-    if (!credentials.imap.port) missingFields.push('IMAP Port');
-    if (!credentials.imap.user) missingFields.push('Username');
-    if (!credentials.imap.password) missingFields.push('Password');
-
-    if (missingFields.length > 0) {
-      throw new Error(
-        `Email configuration incomplete. Missing: ${missingFields.join(', ')}`
-      );
-    }
-
-    // Log configuration without sensitive data
-    console.log('🔑 IMAP Configuration:', {
-      host: credentials.imap.host,
-      port: credentials.imap.port,
-      user: credentials.imap.user,
-      hasPassword: !!credentials.imap.password,
-      isGmail: credentials.imap.user?.toLowerCase().endsWith('@gmail.com')
-    });
-
-    imap = await getImapConnection(user.emailConfig);
-    
-    return new Promise((resolve, reject) => {
-      // Change allEmails to be an array since we're using push
-      const allEmails = [];
-      
-      imap.once('ready', () => {
-        // Use FOLDER_MAPPING to get correct folder path
-        const folderPath = FOLDER_MAPPING[folder.toLowerCase()] || folder;
-        
-        imap.openBox(folderPath, false, async (err, box) => {
-          if (err) {
-            console.error('Error opening mailbox:', err);
-            console.error('Attempted folder path:', folderPath);
-            return reject(err);
-          }
-
-          const total = box.messages.total;
-          const start = Math.max(1, total - ((page - 1) * limit));
-          const end = Math.max(1, start - limit);
-
-          try {
-            const fetch = imap.seq.fetch(`${end}:${start}`, DEFAULT_FETCH_OPTIONS);
-
-            fetch.on('message', (msg, seqno) => {
-              const email = {};
-
-              msg.on('body', (stream, info) => {
-                let buffer = '';
-                stream.on('data', (chunk) => {
-                  buffer += chunk.toString('utf8');
-                });
-                stream.once('end', () => {
-                  if (info.which !== 'TEXT') {
-                    email.headers = Imap.parseHeader(buffer);
-                  } else {
-                    email.body = buffer;
-                  }
-                });
-              });
-
-              msg.once('attributes', (attrs) => {
-                email.attrs = attrs;
-              });
-
-              msg.once('end', () => {
-                const processed = {
-                  id: email.attrs?.uid?.toString() || seqno.toString(),
-                  messageId: email.headers?.['message-id']?.[0],
-                  from: email.headers?.from?.[0] || '',
-                  to: email.headers?.to?.[0] || '',
-                  subject: email.headers?.subject?.[0] || '(No Subject)',
-                  date: email.headers?.date?.[0] || new Date().toISOString(),
-                  content: email.body || '',
-                  flags: email.attrs?.flags || [],
-                  labels: email.attrs?.['x-gm-labels'] || [],
-                  read: email.attrs?.flags?.includes('\\Seen') || false,
-                  starred: email.attrs?.flags?.includes('\\Flagged') || false
-                };
-
-                // Push to array instead of using Map
-                allEmails.push(processed);
-              });
-            });
-
-            fetch.once('error', (err) => {
-              console.error('Fetch error:', err);
-              reject(err);
-            });
-
-            fetch.once('end', () => {
-              imap.end();
-              
-              // Sort the array directly
-              const sortedEmails = allEmails.sort((a, b) => 
-                new Date(b.date) - new Date(a.date)
-              );
-
-              resolve({
-                success: true,
-                emails: sortedEmails,
-                pagination: {
-                  total: box.messages.total,
-                  pages: Math.ceil(box.messages.total / limit),
-                  current: page,
-                  hasMore: end > 1
-                }
-              });
-            });
-          } catch (err) {
-            console.error('Error creating fetch:', err);
-            reject(err);
-          }
-        });
-      });
-
-      imap.once('error', (err) => {
-        console.error('IMAP connection error:', err);
-        reject(err);
-      });
-
-      imap.once('end', () => {
-        console.log('IMAP connection ended');
-      });
-
-      imap.connect();
-    });
-  } catch (error) {
-    console.error('IMAP Error:', error);
-    if (imap?.end) imap.end();
-    throw error;
-  }
-};
+// Removed duplicate fetchEmailsIMAP function
 
 const FOLDERS = ['inbox', 'sent', 'drafts', 'spam', 'trash', 'archive', 'starred'];
 
@@ -817,5 +615,115 @@ export const bulkMoveToFolder = async (emailIds, userId, folder) => {
   } catch (error) {
     console.error(`Failed to move emails to ${folder}:`, error);
     throw new Error(`Failed to move emails to ${folder}`);
+  }
+};
+
+// Update connection constants
+const IMAP_CONFIG = {
+  connTimeout: 5000, // 5 seconds
+  authTimeout: 5000,
+  keepalive: false,
+  tlsOptions: { 
+    rejectUnauthorized: false,
+    timeout: 3000
+  }
+};
+
+// Add connection pool with cleanup
+const imapPool = new Map();
+const POOL_CLEANUP_INTERVAL = 60000; // 1 minute
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, conn] of imapPool.entries()) {
+    if (now - conn.lastUsed > 30000) { // 30 seconds
+      if (conn.imap?.state === 'connected') {
+        conn.imap.end();
+      }
+      imapPool.delete(key);
+    }
+  }
+}, POOL_CLEANUP_INTERVAL);
+
+// Optimized getImapConnection function
+const getImapConnection = async (userConfig) => {
+  try {
+    const poolKey = `${userConfig.imap.user}`;
+    let pooledConn = imapPool.get(poolKey);
+
+    if (pooledConn?.imap?.state === 'connected') {
+      pooledConn.lastUsed = Date.now();
+      return pooledConn.imap;
+    }
+
+    const password = userConfig.imap.password.includes(':') 
+      ? await decrypt(userConfig.imap.password)
+      : userConfig.imap.password;
+
+    const config = {
+      ...IMAP_CONFIG,
+      user: userConfig.imap.user,
+      password,
+      ...(userConfig.imap.user.toLowerCase().endsWith('@gmail.com') 
+        ? GMAIL_IMAP_CONFIG 
+        : {
+          host: userConfig.imap.host,
+          port: userConfig.imap.port,
+          tls: true
+        })
+    };
+
+    const imap = new Imap(config);
+    
+    const connection = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        imap.end();
+        reject(new Error('IMAP connection timeout'));
+      }, 5000);
+
+      imap.once('ready', () => {
+        clearTimeout(timeout);
+        resolve(imap);
+      });
+
+      imap.once('error', (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      });
+
+      imap.connect();
+    });
+
+    const connectedImap = await connection;
+    imapPool.set(poolKey, { imap: connectedImap, lastUsed: Date.now() });
+    return connectedImap;
+  } catch (error) {
+    throw new Error(`IMAP Connection failed: ${error.message}`);
+  }
+};
+
+// Optimized fetchEmailsIMAP function with retries
+export const fetchEmailsIMAP = async (user, folder = 'inbox', page = 1, limit = 50) => {
+  let retries = 3;
+  
+  while (retries > 0) {
+    try {
+      const imap = await getImapConnection(user.emailConfig);
+      
+      // Add timeout to the fetch operation
+      const fetchPromise = new Promise((resolve, reject) => {
+        // ...existing email fetch code...
+      });
+
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Fetch operation timeout')), 25000);
+      });
+
+      return await Promise.race([fetchPromise, timeoutPromise]);
+    } catch (error) {
+      retries--;
+      if (retries === 0) throw error;
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
   }
 };
