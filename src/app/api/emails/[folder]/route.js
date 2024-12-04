@@ -53,7 +53,6 @@ export async function GET(request) {
   const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT);
   let isCancelled = false;
   let cacheKey = null;
-  let user = null; // Define user variable here
 
   try {
     // Get folder from URL path instead of context.params
@@ -74,6 +73,11 @@ export async function GET(request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    // Check if email credentials are available in the session
+    if (!session.emailCredentials) {
+      return NextResponse.redirect('/dashboard/settings/email');
+    }
+
     // Check cache first
     cacheKey = getCacheKey(session.user.id, folder, page, limit);
     if (!refresh) {
@@ -86,15 +90,7 @@ export async function GET(request) {
 
     await connect();
     
-    user = await User.findById(session.user.id)
-      .select('+emailConfig.smtp.password +emailConfig.imap.password');
-    
-    if (!user?.emailConfig?.imap) {
-      clearTimeout(timeoutId);
-      return NextResponse.json({ error: "EMAIL_NOT_CONFIGURED" }, { status: 400 });
-    }
-
-    // Pass userId to fetchEmailsIMAP
+    // Use email credentials from the session
     const result = await fetchEmailsIMAP({
       userId: session.user.id,
       folder,
@@ -114,12 +110,6 @@ export async function GET(request) {
     console.error('Email API Error:', error);
 
     if (error.message === 'Invalid credentials (Failure)') {
-      if (user) {
-        console.error('Invalid credentials:', {
-          user: user.emailConfig.imap.user,
-          host: user.emailConfig.imap.host
-        });
-      }
       return NextResponse.json({
         error: 'Invalid email credentials - please check your email settings',
         code: 'INVALID_CREDENTIALS'

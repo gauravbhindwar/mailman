@@ -1,6 +1,7 @@
 import CredentialsProvider from "next-auth/providers/credentials";
 import { connect } from "../../../../lib/dbConfig";
 import User from "../../../../models/User";
+import { fetchAndDecryptEmailCredentials } from "@/utils/emailService";
 
 export const authOptions = {
   providers: [
@@ -52,12 +53,21 @@ export const authOptions = {
     async jwt({ token, user, account }) {
       if (user) {
         token.user = user;
+        // Fetch and store email credentials in the token
+        try {
+          const emailCredentials = await fetchAndDecryptEmailCredentials(user.id);
+          token.emailCredentials = emailCredentials;
+        } catch (error) {
+          console.error('Failed to fetch email credentials:', error);
+        }
       }
       return token;
     },
     async session({ session, token }) {
       if (token?.user) {
         session.user = token.user;
+        // Store email credentials in the session
+        session.emailCredentials = token.emailCredentials;
       }
       return session;
     }

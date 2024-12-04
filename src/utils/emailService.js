@@ -372,7 +372,7 @@ const CONNECTION_POOL_SIZE = 5;
 const CONNECTION_TIMEOUT = 1000 * 60 * 5; // 5 minutes
 
 // Function to fetch and decrypt email credentials
-const fetchAndDecryptEmailCredentials = async (userId) => {
+export const fetchAndDecryptEmailCredentials = async (userId) => {
   const cacheKey = `emailCredentials:${userId}`;
   let credentials = cache.get(cacheKey);
 
@@ -380,7 +380,7 @@ const fetchAndDecryptEmailCredentials = async (userId) => {
     const user = await User.findById(userId)
       .select('+emailConfig.smtp.password +emailConfig.imap.password');
 
-    if (!user?.emailConfig) {
+    if (!user?.emailConfig?.smtp?.host || !user?.emailConfig?.imap?.host) {
       throw new Error('Email configuration not found');
     }
 
