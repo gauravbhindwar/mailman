@@ -44,117 +44,139 @@ const parseEmailContent = async (content) => {
 
 export async function GET(req, context) {
   try {
-    // Properly await the params object
-    const { folder } = await context.params;
-    
-    // Early validation
-    const validFolders = ['inbox', 'sent', 'drafts', 'spam', 'trash', 'archive', 'starred', 'all'];
-    if (!folder || !validFolders.includes(folder.toLowerCase())) {
-      return NextResponse.json(
-        { error: "Invalid folder specified" }, 
-        { status: 400 }
-      );
-    }
+    // Add timeout for the entire request
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Request timeout')), 30000);
+    });
 
-    const session = await getServerSession(authOptions);
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const resultPromise = (async () => {
+      const { folder } = context.params;
+      
+      // Early validation
+      const validFolders = ['inbox', 'sent', 'drafts', 'spam', 'trash', 'archive', 'starred', 'all'];
+      if (!folder || !validFolders.includes(folder.toLowerCase())) {
+        return NextResponse.json(
+          { error: "Invalid folder specified" }, 
+          { status: 400 }
+        );
+      }
 
-    await connect();
-    
-    const user = await User.findById(session.user.id)
-      .select('+emailConfig.smtp.password +emailConfig.imap.password');
-    
-    if (!user) {
-      return NextResponse.json({ error: "User not found" }, { status: 404 });
-    }
+      const session = await getServerSession(authOptions);
+      if (!session?.user?.id) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      }
 
-    if (!user.emailConfig?.imap) {
-      return NextResponse.json({ error: "EMAIL_NOT_CONFIGURED" }, { status: 400 });
-    }
+      await connect();
+      
+      const user = await User.findById(session.user.id)
+        .select('+emailConfig.smtp.password +emailConfig.imap.password');
+      
+      if (!user) {
+        return NextResponse.json({ error: "User not found" }, { status: 404 });
+      }
 
-    const searchParams = new URL(req.url).searchParams;
-    const page = parseInt(searchParams.get('page')) || 1;
-    const limit = parseInt(searchParams.get('limit')) || 50;
-    const refresh = searchParams.get('refresh') === 'true';
+      if (!user.emailConfig?.imap) {
+        throw new Error('EMAIL_NOT_CONFIGURED');
+      }
 
-    // Enhanced folder mapping for Gmail and other providers
-    const folderMap = {
-      'sent': '[Gmail]/Sent Mail',
-      'all': '[Gmail]/All Mail',
-      'archive': '[Gmail]/All Mail',
-      'trash': '[Gmail]/Trash',
-      'spam': '[Gmail]/Spam',
-      'drafts': '[Gmail]/Drafts',
-      'starred': '[Gmail]/Starred',
-      'inbox': 'INBOX'
-    };
+      const searchParams = new URL(req.url).searchParams;
+      const page = parseInt(searchParams.get('page')) || 1;
+      const limit = parseInt(searchParams.get('limit')) || 50;
+      const refresh = searchParams.get('refresh') === 'true';
 
-    const folderPath = folderMap[folder.toLowerCase()] || folder;
-    console.log(`📂 Fetching emails from folder: ${folderPath}`);
+      // Enhanced folder mapping for Gmail and other providers
+      const folderMap = {
+        'sent': '[Gmail]/Sent Mail',
+        'all': '[Gmail]/All Mail',
+        'archive': '[Gmail]/All Mail',
+        'trash': '[Gmail]/Trash',
+        'spam': '[Gmail]/Spam',
+        'drafts': '[Gmail]/Drafts',
+        'starred': '[Gmail]/Starred',
+        'inbox': 'INBOX'
+      };
 
-    const cacheKey = getCacheKey(user._id, folder, page, limit);
-    if (refresh) {
-      cache.del(cacheKey);
-    }
+      const folderPath = folderMap[folder.toLowerCase()] || folder;
+      console.log(`📂 Fetching emails from folder: ${folderPath}`);
 
-    // Try cache first
-    const cached = !refresh && cache.get(cacheKey);
-    if (cached) {
-      console.log(`📫 Returning cached ${folder} emails`);
-      return NextResponse.json({ ...cached, cached: true });
-    }
+      const cacheKey = getCacheKey(user._id, folder, page, limit);
+      if (refresh) {
+        cache.del(cacheKey);
+      }
 
-    // Fetch fresh emails
-    const result = await fetchEmailsIMAP(user, folderPath, page, limit);
-    
-    if (!result.success) {
-      throw new Error(result.error || 'Failed to fetch emails');
-    }
+      // Try cache first
+      const cached = !refresh && cache.get(cacheKey);
+      if (cached) {
+        console.log(`📫 Returning cached ${folder} emails`);
+        return NextResponse.json({ ...cached, cached: true });
+      }
 
-    // Parse MIME content for each email
-    const parsedEmails = await Promise.all(
-      result.emails.map(async (email) => {
-        if (email.content) {
-          try {
-            const parsedContent = await parseEmailContent(email.content);
-            return {
-              ...email,
-              content: parsedContent
-            };
-          } catch (error) {
-            console.error('Failed to parse email content:', error);
-            return {
-              ...email,
-              content: {
-                html: '',
-                text: String(email.content) || 'Failed to parse content',
-                attachments: []
-              }
-            };
+      // Log connection attempt
+      console.log('Attempting IMAP connection for user:', user._id);
+
+      // Fetch fresh emails
+      const result = await fetchEmailsIMAP(user, folderPath, page, limit);
+      
+      if (!result?.success) {
+        throw new Error(result?.error || 'Failed to fetch emails');
+      }
+
+      // Parse MIME content for each email
+      const parsedEmails = await Promise.all(
+        result.emails.map(async (email) => {
+          if (email.content) {
+            try {
+              const parsedContent = await parseEmailContent(email.content);
+              return {
+                ...email,
+                content: parsedContent
+              };
+            } catch (error) {
+              console.error('Failed to parse email content:', error);
+              return {
+                ...email,
+                content: {
+                  html: '',
+                  text: String(email.content) || 'Failed to parse content',
+                  attachments: []
+                }
+              };
+            }
           }
-        }
-        return email;
-      })
-    );
+          return email;
+        })
+      );
 
-    const response = {
-      ...result,
-      emails: parsedEmails,
-      cached: false
-    };
+      const response = {
+        ...result,
+        emails: parsedEmails,
+        cached: false
+      };
 
-    // Cache the result
-    cache.set(cacheKey, response, 60); // Cache for 60 seconds
+      // Cache the result
+      cache.set(cacheKey, response, 30); // Cache for 30 seconds
 
-    return NextResponse.json(response);
+      return response;
+    })();
+
+    // Race between timeout and actual execution
+    const result = await Promise.race([resultPromise, timeoutPromise]);
+    return NextResponse.json(result);
 
   } catch (error) {
-    console.error('❌ Email API error:', error);
-    return NextResponse.json(
-      { error: error.message || 'Internal server error' },
-      { status: 500 }
-    );
+    console.error('Email API Error:', {
+      message: error.message,
+      stack: error.stack,
+      name: error.name
+    });
+
+    // Return more detailed error for debugging
+    return NextResponse.json({
+      error: 'Failed to fetch emails',
+      details: error.message,
+      code: error.code || 'UNKNOWN_ERROR'
+    }, { 
+      status: error.message === 'EMAIL_NOT_CONFIGURED' ? 400 : 500 
+    });
   }
 }

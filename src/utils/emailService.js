@@ -399,14 +399,29 @@ const getImapConnection = async (userConfig) => {
             servername: userConfig.imap.host
           }
         }),
-        keepalive: true, // Enable keepalive
+        keepalive: false, // Disable keepalive for Vercel
+        timeout: 10000, // 10 second timeout
+        connTimeout: 10000, // 10 second connection timeout
         debug: process.env.NODE_ENV === 'development' ? console.log : null
       };
       
       connection = new Imap(imapConfig);
       
-      // Handle connection errors
+      // Add connection timeout handler
+      const connectionTimeout = setTimeout(() => {
+        if (connection.state !== 'connected') {
+          connection.end();
+          imapConnectionPool.delete(poolKey);
+          throw new Error('IMAP connection timeout');
+        }
+      }, 15000); // 15 second total timeout
+
+      connection.on('ready', () => {
+        clearTimeout(connectionTimeout);
+      });
+
       connection.on('error', (err) => {
+        clearTimeout(connectionTimeout);
         console.error('IMAP connection error:', err);
         connection.end();
         imapConnectionPool.delete(poolKey);
@@ -414,18 +429,18 @@ const getImapConnection = async (userConfig) => {
 
       imapConnectionPool.set(poolKey, connection);
       
-      // Clean up old connections
+      // Clean up connection after use
       setTimeout(() => {
         const conn = imapConnectionPool.get(poolKey);
         if (conn?.end) conn.end();
         imapConnectionPool.delete(poolKey);
-      }, CONNECTION_TIMEOUT);
+      }, 30000); // 30 second max connection time
     }
 
     return connection;
   } catch (error) {
     console.error('IMAP Connection Error:', error);
-    throw error;
+    throw new Error(`IMAP Connection failed: ${error.message}`);
   }
 };
 
