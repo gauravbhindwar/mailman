@@ -101,7 +101,7 @@ const formatEmailDate = (dateStr) => {
   }
 };
 
-const EmailHeader = ({ email, onClose }) => (
+const EmailHeader = ({ email, onClose, onReply, onForward }) => (
   <div className="p-6 border-b bg-white sticky top-0 z-10 shadow-sm">
     <div className="flex justify-between items-start mb-4">
       <div className="flex-1 pr-4">
@@ -167,11 +167,11 @@ const EmailHeader = ({ email, onClose }) => (
     </div>
 
     <div className="flex gap-2 mt-4">
-      <button className="action-button primary">
+      <button className="action-button primary" onClick={onReply}>
         <MdReply className="w-5 h-5" />
         Reply
       </button>
-      <button className="action-button">
+      <button className="action-button" onClick={onForward}>
         <MdForward className="w-5 h-5" />
         Forward
       </button>
@@ -507,9 +507,9 @@ const EmailStyles = () => (
 
 export default function EmailDetail({ email, onClose }) {
   const router = useRouter();
-  const [isReplying, setIsReplying] = useState(false);
-  const [isForwarding, setIsForwarding] = useState(false);
-
+  
+  // Remove the isReplying and isForwarding states since we're not using ReplyForm anymore
+  
   if (!email) return null;
 
   // Format email data with comprehensive fallbacks
@@ -547,7 +547,6 @@ export default function EmailDetail({ email, onClose }) {
       `.trim()
     };
     
-    // Properly encode the data to base64
     const encodedData = btoa(unescape(encodeURIComponent(JSON.stringify(replyData))));
     router.push(`/dashboard/compose?reply=${encodedData}`);
     onClose();
@@ -568,7 +567,6 @@ export default function EmailDetail({ email, onClose }) {
       `.trim()
     };
     
-    // Properly encode the data to base64
     const encodedData = btoa(unescape(encodeURIComponent(JSON.stringify(forwardData))));
     router.push(`/dashboard/compose?forward=${encodedData}`);
     onClose();
@@ -589,7 +587,12 @@ export default function EmailDetail({ email, onClose }) {
         exit="exit"
         className="bg-gray-50 rounded-xl shadow-2xl w-full max-w-4xl my-8"
       >
-        <EmailHeader email={formattedEmail} onClose={onClose} />
+        <EmailHeader 
+          email={formattedEmail} 
+          onClose={onClose}
+          onReply={handleReply}
+          onForward={handleForward}
+        />
         <div className="overflow-y-auto max-h-[calc(90vh-200px)]">
           <MessageThread 
             messages={formattedEmail.messages} 
@@ -597,31 +600,7 @@ export default function EmailDetail({ email, onClose }) {
           />
         </div>
 
-        <AnimatePresence>
-          {isReplying && (
-            <ReplyForm
-              onSubmit={handleReply}
-              onCancel={() => setIsReplying(false)}
-            />
-          )}
-          {isForwarding && (
-            <ReplyForm
-              onSubmit={handleForward}
-              onCancel={() => setIsForwarding(false)}
-              initialContent={`
-                <br/><br/>
-                ---------- Forwarded message ----------<br/>
-                From: ${email.participants[0].name} <${email.participants[0].email}><br/>
-                Date: ${new Date(email.messages[0].createdAt).toLocaleString()}<br/>
-                Subject: ${email.subject}<br/>
-                To: ${email.participants[1].email}<br/>
-                <br/>
-                ${email.messages[0].content}
-              `}
-              isForward={true}
-            />
-          )}
-        </AnimatePresence>
+        {/* Remove ReplyForm components and AnimatePresence */}
 
         <EmailStyles />
       </motion.div>
