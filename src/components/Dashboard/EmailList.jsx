@@ -215,6 +215,25 @@ const formatDisplayDate = (dateStr) => {
   }
 };
 
+const Avatar = ({ name, email, size = 'md' }) => {
+  const initial = getInitials(name);
+  const colorClass = getRandomColor(email);
+  const sizeClasses = {
+    sm: 'w-8 h-8 text-sm',
+    md: 'w-10 h-10 text-base',
+    lg: 'w-12 h-12 text-lg'
+  };
+
+  return (
+    <div 
+      className={`${sizeClasses[size]} rounded-full flex-shrink-0 flex items-center justify-center text-white font-medium ${colorClass}`}
+      title={name}
+    >
+      {initial}
+    </div>
+  );
+};
+
 const EmailItem = React.memo(function EmailItem({ email, type, selectedEmails, toggleEmailSelection, toggleStar, onClick, showAll }) {
   const senderInfo = getSenderInfo(email, type);
   const messageTag = getMessageTag(email, type);
@@ -223,93 +242,116 @@ const EmailItem = React.memo(function EmailItem({ email, type, selectedEmails, t
   if (!formattedEmail) return null;
 
   return (
-    <motion.div variants={itemAnimation} className="group relative bg-white border-b border-gray-100">
-      <div className="flex items-center p-4 cursor-pointer" onClick={(e) => onClick(e, formattedEmail)}>
-        <div className="flex items-center space-x-2 min-w-[80px]">
-          <motion.button
-            onClick={(e) => {
-              e.stopPropagation();
-              toggleEmailSelection(formattedEmail.id, e);
-            }}
-            whileHover={{ scale: 1.1 }}
-            whileTap={{ scale: 0.9 }}
-            className="text-gray-400 hover:text-gray-600"
-          >
-            {selectedEmails.includes(formattedEmail.id) ? (
-              <MdCheckBox className="w-5 h-5" />
-            ) : (
-              <MdCheckBoxOutlineBlank className="w-5 h-5" />
-            )}
-          </motion.button>
-          <motion.button
-            onClick={(e) => {
-              e.stopPropagation();
-              toggleStar(formattedEmail.id, e);
-            }}
-            whileHover={{ scale: 1.1 }}
-            whileTap={{ scale: 0.9 }}
-            className="text-gray-400 hover:text-yellow-400"
-          >
-            {formattedEmail.starred ? (
-              <MdStar className="w-5 h-5 text-yellow-400" />
-            ) : (
-              <MdStarBorder className="w-5 h-5" />
-            )}
-          </motion.button>
+    <motion.div variants={itemAnimation} className="group px-2 py-1">
+      <div 
+        className="backdrop-blur-xl bg-white/5 hover:bg-white/10 transition-all border border-white/10 rounded-xl overflow-hidden"
+        onClick={(e) => onClick(e, formattedEmail)} // Make entire item clickable
+      >
+        {/* Mobile Layout */}
+        <div className="block md:hidden p-4">
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleEmailSelection(formattedEmail.id, e);
+                }}
+                className="p-1"
+              >
+                {selectedEmails.includes(formattedEmail.id) ? 
+                  <MdCheckBox className="w-5 h-5 text-blue-500" /> : 
+                  <MdCheckBoxOutlineBlank className="w-5 h-5 text-gray-400" />
+                }
+              </button>
+              <Avatar name={senderInfo.name} email={senderInfo.email} size="sm" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center justify-between">
+                <span className="font-medium text-sm text-white">{senderInfo.name}</span>
+                <span className="text-xs text-gray-400">
+                  {formatDistanceToNow(new Date(email.date), { addSuffix: true })}
+                </span>
+              </div>
+              <p className="text-sm text-gray-200 truncate">{formattedEmail.subject}</p>
+              <p className="text-xs text-gray-400 truncate">{getPreviewText(formattedEmail.content)}</p>
+            </div>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleStar(formattedEmail.id, e);
+              }}
+              className="p-1"
+            >
+              {formattedEmail.starred ? 
+                <MdStar className="w-5 h-5 text-yellow-400" /> : 
+                <MdStarBorder className="w-5 h-5 text-gray-400" />
+              }
+            </button>
+          </div>
         </div>
 
-        <motion.div 
-          className="mr-4"
-          whileHover={{ scale: 1.1 }}
+        {/* Desktop Layout */}
+        <div 
+          className="hidden md:flex items-center px-4 py-3 cursor-pointer gap-4"
+          onClick={(e) => onClick(e, formattedEmail)}
         >
-          <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-medium 
-            ${getRandomColor(senderInfo.email)}`}
-          >
-            {getInitials(senderInfo.name)}
-          </div>
-        </motion.div>
-
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center justify-between mb-1">
+          <div className="flex items-center gap-3 w-[240px] flex-shrink-0">
             <div className="flex items-center gap-2">
-              <span className="font-medium text-gray-900">
-                {senderInfo.name}
-                <span className="ml-2 text-sm text-gray-500">
-                  ({senderInfo.email})
-                </span>
-              </span>
-              <TagBadge tag={messageTag} />
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleEmailSelection(formattedEmail.id, e);
+                }}
+                className="p-1"
+              >
+                {selectedEmails.includes(formattedEmail.id) ? 
+                  <MdCheckBox className="w-5 h-5 text-blue-500" /> : 
+                  <MdCheckBoxOutlineBlank className="w-5 h-5 text-gray-400" />
+                }
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleStar(formattedEmail.id, e);
+                }}
+                className="p-1"
+              >
+                {formattedEmail.starred ? 
+                  <MdStar className="w-5 h-5 text-yellow-400" /> : 
+                  <MdStarBorder className="w-5 h-5 text-gray-400" />
+                }
+              </button>
             </div>
-            <span className="text-sm text-gray-500 whitespace-nowrap">
-              {formatDistanceToNow(new Date(email.date), { addSuffix: true })}
-            </span>
+            <div className="flex items-center gap-2 min-w-0">
+              <Avatar name={senderInfo.name} email={senderInfo.email} />
+              <span className="font-medium text-sm truncate text-blue-300">
+                {senderInfo.name}
+              </span>
+            </div>
           </div>
-          
-          <div className="flex items-start justify-between">
-            <div className="flex-1 min-w-0">
-              <h3 className={`text-sm ${!formattedEmail.read ? 'font-semibold text-gray-900' : 'font-medium text-gray-600'} truncate mb-1`}>
-                {formattedEmail.subject || '(No Subject)'}
-              </h3>
-              <p className="text-sm text-gray-500 line-clamp-1">
+
+          <div className="flex-1 flex items-center gap-4 min-w-0 pr-4">
+            <div className="flex-1 flex flex-col min-w-0">
+              <p className={`text-sm ${!formattedEmail.read ? 'font-semibold text-white' : 'text-gray-300'} truncate`}>
+                {formattedEmail.subject}
+              </p>
+              <p className="text-sm text-gray-400 truncate">
                 {getPreviewText(formattedEmail.content)}
               </p>
             </div>
-            
-            <div className="hidden group-hover:flex items-center gap-2 ml-4">
-              <motion.button
-                whileHover={{ scale: 1.1 }}
-                whileTap={{ scale: 0.95 }}
-                className="p-1.5 rounded-full hover:bg-gray-100"
-              >
-                <MdArchive className="w-5 h-5 text-gray-500" />
-              </motion.button>
-              <motion.button
-                whileHover={{ scale: 1.1 }}
-                whileTap={{ scale: 0.95 }}
-                className="p-1.5 rounded-full hover:bg-gray-100"
-              >
-                <MdDelete className="w-5 h-5 text-gray-500" />
-              </motion.button>
+            <div className="flex items-center gap-4 flex-shrink-0">
+              <TagBadge tag={messageTag} />
+              <div className="hidden group-hover:flex items-center gap-1">
+                <button className="p-2 hover:bg-white/10 rounded-full" title="Archive">
+                  <MdArchive className="w-5 h-5 text-gray-300" />
+                </button>
+                <button className="p-2 hover:bg-white/10 rounded-full" title="Delete">
+                  <MdDelete className="w-5 h-5 text-gray-300" />
+                </button>
+              </div>
+              <span className="text-sm text-gray-400 w-20 text-right">
+                {formatDistanceToNow(new Date(email.date), { addSuffix: true })}
+              </span>
             </div>
           </div>
         </div>
@@ -396,10 +438,12 @@ const EmailList = ({ emails = [], type, selectedEmails = [], setSelectedEmails, 
   const handleEmailClick = useCallback((e, email) => {
     e.preventDefault();
     e.stopPropagation();
+    document.body.style.overflow = 'hidden'; // Prevent background scrolling
     setSelectedEmail(email);
   }, []);
 
   const handleCloseDetail = useCallback(() => {
+    document.body.style.overflow = ''; // Restore scrolling
     setSelectedEmail(null);
   }, []);
 
@@ -409,79 +453,64 @@ const EmailList = ({ emails = [], type, selectedEmails = [], setSelectedEmails, 
   }, [handleRefresh]);
 
   const renderEmailItem = useCallback(({ index, style }) => {
-  }, [memoizedValue, type, selectedEmails, toggleEmailSelection, toggleStar, itemVariants, handleEmailClick, showAll]);
+  }, []);
 
-  // Show loading state
-  if (initialLoading || fetchLoading) {
-    return (
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        className="flex justify-center items-center h-64"
-      >
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
-      </motion.div>
-    );
-  }
-
-  if (!Array.isArray(emails) || emails.length === 0) {
-    return (
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        className="flex flex-col items-center justify-center h-64 text-gray-500"
-      >
-        <div className="text-xl mb-2">No emails found</div>
-        <div className="text-sm">Your {type} is empty</div>
-      </motion.div>
-    );
-  }
-
-  // Render regular list during SSR
-  if (!isClient) {
-    return (
-      <div className="relative w-full">
-        <motion.div
-          variants={listAnimation}
-          initial="hidden"
-          animate="show"
-          className="divide-y divide-gray-100"
-        >
-          {memoizedValue.slice(0, 10).map((email) => (
-            <EmailItem
-              key={generateUniqueKey(email)}
-              email={email}
-              type={type}
-              selectedEmails={selectedEmails}
-              toggleEmailSelection={toggleEmailSelection}
-              toggleStar={toggleStar}
-              itemVariants={itemVariants}
-              onClick={handleEmailClick}
-              showAll={showAll}
-            />
-          ))}
-        </motion.div>
-      </div>
-    );
-  }
-
-  // Render virtualized list on client
   return (
-    <>
-      <div className="relative w-full h-[calc(100vh-200px)]"> {/* Fixed height container */}
-        <div className="absolute inset-0">
+    <div className="h-full flex flex-col relative">
+      {initialLoading || fetchLoading ? (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="flex-1 flex justify-center items-center"
+        >
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+        </motion.div>
+      ) : !Array.isArray(emails) || emails.length === 0 ? (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="flex-1 flex flex-col items-center justify-center text-gray-500"
+        >
+          <div className="text-xl mb-2">No emails found</div>
+          <div className="text-sm">Your {type} is empty</div>
+        </motion.div>
+      ) : !isClient ? (
+        <div className="flex-1 overflow-y-auto overscroll-contain">
+          <motion.div
+            variants={listAnimation}
+            initial="hidden"
+            animate="show"
+            className="divide-y divide-gray-100"
+          >
+            {memoizedValue.slice(0, 10).map((email) => (
+              <EmailItem
+                key={generateUniqueKey(email)}
+                email={email}
+                type={type}
+                selectedEmails={selectedEmails}
+                toggleEmailSelection={toggleEmailSelection}
+                toggleStar={toggleStar}
+                itemVariants={itemVariants}
+                onClick={handleEmailClick}
+                showAll={showAll}
+              />
+            ))}
+          </motion.div>
+        </div>
+      ) : (
+        <div className="flex-1 relative">
           <AutoSizer>
             {({ height, width }) => (
               <List
                 height={height}
                 width={width}
                 itemCount={memoizedValue.length}
-                itemSize={100} // Increased item size for better visibility
+                itemSize={type === 'mobile' ? 96 : 76} // Increased heights
                 overscanCount={5}
-                className="divide-y divide-gray-100"
+                className="px-2 py-1"
               >
                 {({ index, style }) => (
-                  <div style={{ ...style, width: '100%' }}>
+                  <div style={style}>
                     <EmailItem
                       key={generateUniqueKey(memoizedValue[index])}
                       email={memoizedValue[index]}
@@ -489,7 +518,6 @@ const EmailList = ({ emails = [], type, selectedEmails = [], setSelectedEmails, 
                       selectedEmails={selectedEmails}
                       toggleEmailSelection={toggleEmailSelection}
                       toggleStar={toggleStar}
-                      itemVariants={itemVariants}
                       onClick={handleEmailClick}
                       showAll={showAll}
                     />
@@ -499,15 +527,17 @@ const EmailList = ({ emails = [], type, selectedEmails = [], setSelectedEmails, 
             )}
           </AutoSizer>
         </div>
+      )}
 
-        {selectedEmail && (
+      {selectedEmail && (
+        <div className="fixed inset-0 z-[9999] md:relative">
           <EmailDetail 
             email={selectedEmail}
             onClose={handleCloseDetail}
           />
-        )}
-      </div>
-    </>
+        </div>
+      )}
+    </div>
   );
 };
 

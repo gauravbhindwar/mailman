@@ -178,60 +178,98 @@ const EmailHeader = ({ email, onClose, onReply, onForward }) => {
   const messageTag = getMessageTag(email);
 
   return (
-    <div className="p-6 border-b bg-white sticky top-0 z-10 shadow-sm">
-      <div className="flex justify-between items-start mb-4">
-        <div className="flex-1 pr-4">
-          <h2 className="text-xl font-semibold text-gray-900 mb-1">
-            {email.subject}
-          </h2>
-          <div className="flex items-center gap-2 text-sm">
-            <TagBadge tag={messageTag} />
-            {email.labels?.map(label => (
-              <span key={label} className="bg-blue-50 text-blue-600 px-2 py-1 rounded">
-                {label}
-              </span>
-            ))}
-          </div>
-        </div>
-        <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full">
-          <MdClose className="w-5 h-5 text-gray-600" />
-        </button>
-      </div>
-
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white
-            ${getRandomColor(senderInfo.email)}`}>
-            {getInitials(senderInfo.name)}
-          </div>
-          <div>
-            <div className="font-medium text-gray-900">
-              {senderInfo.name} <span className="text-gray-500">({senderInfo.email})</span>
-            </div>
-            <div className="text-sm text-gray-500">
-              {formatDistanceToNow(new Date(email.date), { addSuffix: true })}
+    <div className="sticky top-0 z-[1000] backdrop-blur-2xl bg-gray-900/90 border-b border-white/20">
+      <div className="p-4 sm:p-6">
+        <div className="flex justify-between items-start mb-4">
+          <div className="flex-1 pr-4">
+            <h2 className="text-lg sm:text-xl font-semibold text-white mb-1 line-clamp-2">
+              {email.subject}
+            </h2>
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <TagBadge tag={messageTag} />
+              {email.labels?.map(label => (
+                <span key={label} className="bg-blue-50 text-blue-600 px-2 py-1 rounded text-xs sm:text-sm">
+                  {label}
+                </span>
+              ))}
             </div>
           </div>
+          <motion.button 
+            onClick={onClose} 
+            className="p-3 hover:bg-red-500/20 rounded-xl flex-shrink-0 text-gray-400 hover:text-red-400 transition-all duration-200 active:scale-90 group"
+            whileHover={{ rotate: 90 }}
+            whileTap={{ scale: 0.9 }}
+          >
+            <motion.div
+              initial={{ scale: 1 }}
+              whileHover={{ scale: 1.2 }}
+              className="relative"
+            >
+              <MdClose className="w-7 h-7" />
+              <span className="absolute inset-0 bg-white/10 rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-200" />
+            </motion.div>
+          </motion.button>
         </div>
-      </div>
 
-      <div className="flex gap-2 mt-4">
-        <button className="action-button primary" onClick={onReply}>
-          <MdReply className="w-5 h-5" />
-          Reply
-        </button>
-        <button className="action-button" onClick={onForward}>
-          <MdForward className="w-5 h-5" />
-          Forward
-        </button>
-        <button className="action-button">
-          <MdArchive className="w-5 h-5" />
-          Archive
-        </button>
-        <button className="action-button danger">
-          <MdDelete className="w-5 h-5" />
-          Delete
-        </button>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+          <div className="flex items-center gap-3">
+            <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white
+              ${getRandomColor(senderInfo.email)}`}>
+              {getInitials(senderInfo.name)}
+            </div>
+            <div className="min-w-0">
+              <div className="font-medium text-white truncate">
+                {senderInfo.name}
+              </div>
+              <div className="text-sm text-gray-400 truncate">
+                {senderInfo.email}
+              </div>
+            </div>
+          </div>
+          <div className="text-sm text-gray-400">
+            {formatDistanceToNow(new Date(email.date), { addSuffix: true })}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-3 mt-6">
+          <button 
+            onClick={onReply}
+            className="flex items-center gap-2 px-4 py-2.5 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 hover:text-blue-300 rounded-xl transition-all duration-200 active:scale-95 font-medium"
+          >
+            <MdReply className="w-5 h-5" />
+            <span className="hidden sm:inline">Reply</span>
+          </button>
+          
+          <button 
+            onClick={onForward}
+            className="flex items-center gap-2 px-4 py-2.5 bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white rounded-xl transition-all duration-200 active:scale-95 font-medium"
+          >
+            <MdForward className="w-5 h-5" />
+            <span className="hidden sm:inline">Forward</span>
+          </button>
+          
+          <button 
+            className="flex items-center gap-2 px-4 py-2.5 bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white rounded-xl transition-all duration-200 active:scale-95 font-medium"
+          >
+            <MdArchive className="w-5 h-5" />
+            <span className="hidden sm:inline">Archive</span>
+          </button>
+          
+          <button 
+            className="flex items-center gap-2 px-4 py-2.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 rounded-xl transition-all duration-200 active:scale-95 font-medium"
+          >
+            <MdDelete className="w-5 h-5" />
+            <span className="hidden sm:inline">Delete</span>
+          </button>
+
+          <div className="flex-1 flex justify-end">
+            <button 
+              className="p-2.5 hover:bg-white/10 rounded-xl text-gray-400 hover:text-white transition-all duration-200 active:scale-95"
+            >
+              <MdMoreVert className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -324,7 +362,7 @@ const parseEmailAddress = (emailStr) => {
 
 const MessageThread = ({ messages = [], participants = [] }) => (
   <div className="p-6">
-    <div className="bg-white rounded-lg p-4">
+    <div className="backdrop-blur-xl bg-white/5 border border-white/10 rounded-xl p-4">
       <MessageContent 
         content={messages[0]?.content || 'No content'} 
         images={messages[0]?.images || []}
@@ -534,6 +572,17 @@ const EmailStyles = () => (
     .message-content div:empty {
       display: none;
     }
+
+    .message-content {
+      // ...existing styles...
+      color: #e5e7eb;  /* text-gray-200 equivalent */
+    }
+    
+    .message-content a {
+      color: #60a5fa;  /* text-blue-400 equivalent */
+    }
+    
+    /* ...rest of the styles with updated colors... */
   `}</style>
 );
 
@@ -620,15 +669,41 @@ export default function EmailDetail({ email, onClose }) {
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 bg-black/30 backdrop-blur-sm z-[100] flex justify-center items-start overflow-y-auto p-4"
+      className="fixed inset-0 bg-black/60 backdrop-blur-md z-[9999] flex items-end md:items-center justify-center"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
       <motion.div 
-        variants={modalAnimation}
+        variants={{
+          hidden: { 
+            opacity: 0, 
+            y: '100%',
+            x: 0,
+            scale: 1
+          },
+          visible: { 
+            opacity: 1, 
+            y: 0,
+            x: 0,
+            scale: 1,
+            transition: {
+              type: "spring",
+              damping: 25,
+              stiffness: 300
+            }
+          },
+          exit: { 
+            opacity: 0,
+            y: '100%',
+            transition: { 
+              duration: 0.2 
+            }
+          }
+        }}
         initial="hidden"
         animate="visible"
         exit="exit"
-        className="bg-gray-50 rounded-xl shadow-2xl w-full max-w-4xl my-8"
+        className="relative backdrop-blur-2xl bg-gray-900/95 w-full md:w-[90vw] md:max-w-4xl h-[95vh] md:h-[90vh] 
+                   rounded-t-2xl md:rounded-xl overflow-hidden shadow-xl border border-white/20"
       >
         <EmailHeader 
           email={formattedEmail} 
@@ -636,14 +711,12 @@ export default function EmailDetail({ email, onClose }) {
           onReply={handleReply}
           onForward={handleForward}
         />
-        <div className="overflow-y-auto max-h-[calc(90vh-200px)]">
+        <div className="overflow-y-auto h-[calc(90vh-200px)] md:max-h-[60vh]">
           <MessageThread 
             messages={formattedEmail.messages} 
             participants={formattedEmail.participants} 
           />
         </div>
-
-        {/* Remove ReplyForm components and AnimatePresence */}
 
         <EmailStyles />
       </motion.div>
