@@ -233,31 +233,6 @@ export const sendVerificationEmail = async (userEmail, verificationUrl) => {
   }
 };
 
-// Fetch and store external emails
-export const fetchAndStoreExternalEmails = async (userId) => {
-  try {
-    await connect();
-    console.log('🔄 Starting email fetch process for user:', userId);
-    
-    const user = await User.findById(userId)
-      .select('+emailConfig.smtp.password +emailConfig.imap.password');
-    
-    if (!user?.emailConfig?.imap?.host) {
-      console.log('Email not configured for user:', userId);
-      return { success: false, error: 'EMAIL_NOT_CONFIGURED' };
-    }
-
-    console.log('📥 Fetching emails from IMAP server...');
-    const emails = await fetchEmailsIMAP(user);
-    console.log(`✅ Fetched ${emails.length} emails from IMAP`);
-
-    return { success: true, emails };
-  } catch (error) {
-    console.error('❌ Error in fetchEmailsIMAP:', error);
-    throw error;
-  }
-};
-
 const formatEmailAddress = (addr) => {
   if (!addr) return '';
   if (typeof addr === 'string') return addr;
@@ -268,60 +243,64 @@ const formatEmailAddress = (addr) => {
   return text || '';
 };
 
+const cleanEmailContent = (content) => {
+  if (!content) return '';
+
+  // Remove email boundary markers
+  content = content.replace(/--[0-9a-f]{32,}(-{2})?/gi, '');
+  
+  // Remove Content-Type headers
+  content = content.replace(/Content-Type: [^\n]+(\n|$)/gi, '');
+  
+  // Remove Content-Transfer-Encoding headers
+  content = content.replace(/Content-Transfer-Encoding: [^\n]+(\n|$)/gi, '');
+  
+  // Remove charset declarations
+  content = content.replace(/charset=["\']?[\w-]+["\']?/gi, '');
+  
+  // Clean up multiple newlines
+  content = content.replace(/\n{3,}/g, '\n\n');
+  
+  return content.trim();
+};
+
 const processMessage = async (rawEmail, attrs = {}) => {
   try {
     const parsed = await simpleParser(rawEmail);
     const envelope = attrs.envelope || {};
     
-    // Extract sender details with better fallbacks
-    const fromEnvelope = envelope.from?.[0] || {};
+    // Extract email addresses more reliably
     const fromHeader = parsed.from?.value?.[0] || {};
-    
-    // Build sender information
-    const senderName = fromEnvelope.name || 
-                      fromHeader.name || 
-                      parsed.from?.text?.split('<')[0]?.trim() || 
-                      fromEnvelope.mailbox || 
-                      '';
-                      
-    const senderEmail = fromEnvelope.mailbox && fromEnvelope.host ? 
-      `${fromEnvelope.mailbox}@${fromEnvelope.host}` : 
-      fromHeader.address || 
-      parsed.from?.text?.match(/<(.+)>/)?.[1] || 
-      '';
+    const fromAddress = fromHeader.address || 
+                       parsed.from?.text?.match(/<(.+?)>$/)?.[1] || 
+                       parsed.from?.text || '';
+    const fromName = fromHeader.name || 
+                    fromAddress.split('@')[0] || 
+                    'Unknown Sender';
 
-    // Extract recipient details
-    const toEnvelope = envelope.to?.[0] || {};
-    const toHeader = parsed.to?.value?.[0] || {};
-    
-    const recipientName = toEnvelope.name || toHeader.name || '';
-    const recipientEmail = toEnvelope.mailbox && toEnvelope.host ? 
-      `${toEnvelope.mailbox}@${toEnvelope.host}` : 
-      toHeader.address || '';
+    // Format sender string properly
+    const from = fromName !== fromAddress ? 
+      `${fromName} <${fromAddress}>` : 
+      fromAddress;
 
-    // Format sender/recipient strings
-    const from = senderName ? `${senderName} <${senderEmail}>` : senderEmail;
-    const to = recipientName ? `${recipientName} <${recipientEmail}>` : recipientEmail;
+    // Get actual content
+    const content = parsed.text || parsed.textAsHtml || parsed.html || '';
+    const cleanedContent = content ? cleanEmailContent(content) : '';
+
+    // Get subject with fallback
+    const subject = parsed.subject || '(No Subject)';
 
     return {
       // ...existing code...
       from,
       fromDetails: {
-        name: senderName.replace(/["']/g, '').trim(),
-        email: senderEmail,
-        raw: from,
-        mailbox: fromEnvelope.mailbox || '',
-        host: fromEnvelope.host || '',
-        displayName: senderName || senderEmail.split('@')[0] || 'Unknown'
+        name: fromName,
+        email: fromAddress,
+        displayName: fromName
       },
-      to,
-      toDetails: {
-        name: recipientName.replace(/["']/g, '').trim(),
-        email: recipientEmail,
-        raw: to,
-        mailbox: toEnvelope.mailbox || '',
-        host: toEnvelope.host || ''
-      },
+      subject,
+      content: cleanedContent || 'No message content',
+      date: parsed.date || new Date(),
       // ...existing code...
     };
   } catch (error) {
@@ -371,229 +350,197 @@ const FOLDER_MAPPING = {
 const CONNECTION_POOL_SIZE = 5;
 const CONNECTION_TIMEOUT = 1000 * 60 * 5; // 5 minutes
 
-// Optimize IMAP connection pooling
-const getImapConnection = async (userConfig) => {
-  try {
-    const poolKey = `${userConfig.imap.user}:${Date.now()}`;
-    let connection = imapConnectionPool.get(poolKey);
+// Function to fetch and decrypt email credentials
+export const fetchAndDecryptEmailCredentials = async (userId) => {
+  const cacheKey = `emailCredentials:${userId}`;
+  let credentials = cache.get(cacheKey);
 
-    if (connection?.state === 'disconnected') {
-      connection.end();
-      connection = null;
+  if (!credentials) {
+    const user = await User.findById(userId)
+      .select('+emailConfig.smtp.password +emailConfig.imap.password');
+
+    if (!user?.emailConfig?.smtp?.host || !user?.emailConfig?.imap?.host) {
+      throw new Error('Email configuration not found');
     }
 
-    if (!connection) {
-      const password = userConfig.imap.password.includes(':') 
-        ? await decrypt(userConfig.imap.password)
-        : userConfig.imap.password;
-      
-      const imapConfig = {
-        user: userConfig.imap.user,
-        password,
-        ...(userConfig.imap.user.toLowerCase().endsWith('@gmail.com') ? GMAIL_IMAP_CONFIG : {
-          host: userConfig.imap.host,
-          port: userConfig.imap.port,
-          tls: true,
-          tlsOptions: { 
-            rejectUnauthorized: false,
-            servername: userConfig.imap.host
-          }
-        }),
-        keepalive: false, // Disable keepalive for Vercel
-        timeout: 10000, // 10 second timeout
-        connTimeout: 10000, // 10 second connection timeout
-        debug: process.env.NODE_ENV === 'development' ? console.log : null
-      };
-      
-      connection = new Imap(imapConfig);
-      
-      // Add connection timeout handler
-      const connectionTimeout = setTimeout(() => {
-        if (connection.state !== 'connected') {
-          connection.end();
-          imapConnectionPool.delete(poolKey);
-          throw new Error('IMAP connection timeout');
-        }
-      }, 15000); // 15 second total timeout
+    credentials = {
+      smtp: {
+        host: user.emailConfig.smtp.host,
+        port: user.emailConfig.smtp.port,
+        secure: user.emailConfig.smtp.secure,
+        user: user.emailConfig.smtp.user,
+        password: decrypt(user.emailConfig.smtp.password)
+      },
+      imap: {
+        host: user.emailConfig.imap.host,
+        port: user.emailConfig.imap.port,
+        user: user.emailConfig.imap.user,
+        password: decrypt(user.emailConfig.imap.password)
+      }
+    };
 
-      connection.on('ready', () => {
-        clearTimeout(connectionTimeout);
-      });
-
-      connection.on('error', (err) => {
-        clearTimeout(connectionTimeout);
-        console.error('IMAP connection error:', err);
-        connection.end();
-        imapConnectionPool.delete(poolKey);
-      });
-
-      imapConnectionPool.set(poolKey, connection);
-      
-      // Clean up connection after use
-      setTimeout(() => {
-        const conn = imapConnectionPool.get(poolKey);
-        if (conn?.end) conn.end();
-        imapConnectionPool.delete(poolKey);
-      }, 30000); // 30 second max connection time
-    }
-
-    return connection;
-  } catch (error) {
-    console.error('IMAP Connection Error:', error);
-    throw new Error(`IMAP Connection failed: ${error.message}`);
+    cache.set(cacheKey, credentials, 300); // Cache for 5 minutes
   }
+
+  return credentials;
+};
+
+// Optimize IMAP connection pooling
+const getImapConnection = async (userId) => {
+  const attempts = { count: 0 };
+  const userConfig = await fetchAndDecryptEmailCredentials(userId);
+
+  const tryConnection = async () => {
+    const connection = new Imap({
+      ...GMAIL_IMAP_CONFIG,
+      user: userConfig.imap.user,
+      password: userConfig.imap.password,
+      authTimeout: 30000,
+      connTimeout: 30000,
+      keepalive: {
+        interval: 10000,
+        idleInterval: 300000,
+        forceNoop: true
+      }
+    });
+
+    return new Promise((resolve, reject) => {
+      const connectTimeout = setTimeout(() => {
+        connection.end();
+        reject(new Error('Connection timeout'));
+      }, 30000);
+
+      connection.once('ready', () => {
+        clearTimeout(connectTimeout);
+        resolve(connection);
+      });
+
+      connection.once('error', (err) => {
+        clearTimeout(connectTimeout);
+        connection.end();
+        reject(err);
+      });
+
+      connection.connect();
+    });
+  };
+
+  return retryWithDelay(tryConnection);
 };
 
 // Merge and optimize fetchEmailsIMAP function
 const DEFAULT_FETCH_OPTIONS = {
-  bodies: ['HEADER.FIELDS (FROM TO SUBJECT DATE)', 'TEXT'],
+  bodies: ['HEADER.FIELDS (FROM TO SUBJECT DATE)', 'TEXT', 'BODY[]'],
   struct: true,
   envelope: true,
   size: true,
   flags: true
 };
 
-export const fetchEmailsIMAP = async (user, folder = 'inbox', page = 1, limit = 50) => {
+const OPERATION_TIMEOUT = 120000; // Increase to 120 seconds (2 minutes)
+const BATCH_SIZE = 10; // Number of emails to fetch per batch
+const CONCURRENT_BATCHES = 2; // Number of concurrent batch operations
+
+// Optimize fetchEmailsIMAP function
+export const fetchEmailsIMAP = async ({ userId, folder = 'inbox', page = 1, limit = 20, signal }) => {
   let imap = null;
-  
+
   try {
-    if (!user?.emailConfig) {
-      throw new Error('Email configuration not found');
-    }
+    imap = await getImapConnection(userId);
 
-    const credentials = user.getEmailCredentials();
-    if (!credentials?.imap) {
-      throw new Error('IMAP credentials not found');
-    }
-
-    // Enhanced credentials validation with detailed error
-    const missingFields = [];
-    if (!credentials.imap.host) missingFields.push('IMAP Host');
-    if (!credentials.imap.port) missingFields.push('IMAP Port');
-    if (!credentials.imap.user) missingFields.push('Username');
-    if (!credentials.imap.password) missingFields.push('Password');
-
-    if (missingFields.length > 0) {
-      throw new Error(
-        `Email configuration incomplete. Missing: ${missingFields.join(', ')}`
-      );
-    }
-
-    // Log configuration without sensitive data
-    console.log('🔑 IMAP Configuration:', {
-      host: credentials.imap.host,
-      port: credentials.imap.port,
-      user: credentials.imap.user,
-      hasPassword: !!credentials.imap.password,
-      isGmail: credentials.imap.user?.toLowerCase().endsWith('@gmail.com')
-    });
-
-    imap = await getImapConnection(user.emailConfig);
-    
-    return new Promise((resolve, reject) => {
-      // Change allEmails to be an array since we're using push
-      const allEmails = [];
+    return await new Promise((resolve, reject) => {
+      const imapFolder = FOLDER_MAPPING[folder.toLowerCase()] || folder;
       
-      imap.once('ready', () => {
-        // Use FOLDER_MAPPING to get correct folder path
-        const folderPath = FOLDER_MAPPING[folder.toLowerCase()] || folder;
-        
-        imap.openBox(folderPath, false, async (err, box) => {
-          if (err) {
-            console.error('Error opening mailbox:', err);
-            console.error('Attempted folder path:', folderPath);
-            return reject(err);
-          }
+      imap.openBox(imapFolder, false, async (err, box) => {
+        if (err) {
+          imap.end();
+          return reject(err);
+        }
 
-          const total = box.messages.total;
-          const start = Math.max(1, total - ((page - 1) * limit));
-          const end = Math.max(1, start - limit);
+        const total = box.messages.total;
+        if (total === 0) {
+          imap.end();
+          return resolve({
+            success: true,
+            emails: [],
+            pagination: { total: 0, pages: 0, current: page, hasMore: false }
+          });
+        }
 
+        const start = Math.max(1, total - ((page - 1) * limit));
+        const end = Math.max(1, start - limit + 1);
+        const fetchSequence = `${end}:${start}`;
+
+        console.log(`📥 Fetching emails from ${start} to ${end} in folder ${imapFolder}`);
+
+        const messages = [];
+        const fetch = imap.seq.fetch(fetchSequence, {
+          bodies: [''],
+          struct: true,
+          envelope: true
+        });
+
+        fetch.on('message', (msg) => {
+          const email = { attrs: null, buffer: '' };
+
+          msg.on('body', (stream, info) => {
+            stream.on('data', (chunk) => {
+              email.buffer += chunk.toString('utf8');
+            });
+          });
+
+          msg.once('attributes', (attrs) => {
+            email.attrs = attrs;
+          });
+
+          msg.once('end', () => {
+            messages.push(email);
+          });
+        });
+
+        fetch.once('error', (err) => {
+          console.error('Fetch error:', err);
+          imap.end();
+          reject(err);
+        });
+
+        fetch.once('end', async () => {
           try {
-            const fetch = imap.seq.fetch(`${end}:${start}`, DEFAULT_FETCH_OPTIONS);
-
-            fetch.on('message', (msg, seqno) => {
-              const email = {};
-
-              msg.on('body', (stream, info) => {
-                let buffer = '';
-                stream.on('data', (chunk) => {
-                  buffer += chunk.toString('utf8');
-                });
-                stream.once('end', () => {
-                  if (info.which !== 'TEXT') {
-                    email.headers = Imap.parseHeader(buffer);
-                  } else {
-                    email.body = buffer;
-                  }
-                });
-              });
-
-              msg.once('attributes', (attrs) => {
-                email.attrs = attrs;
-              });
-
-              msg.once('end', () => {
-                const processed = {
-                  id: email.attrs?.uid?.toString() || seqno.toString(),
-                  messageId: email.headers?.['message-id']?.[0],
-                  from: email.headers?.from?.[0] || '',
-                  to: email.headers?.to?.[0] || '',
-                  subject: email.headers?.subject?.[0] || '(No Subject)',
-                  date: email.headers?.date?.[0] || new Date().toISOString(),
-                  content: email.body || '',
-                  flags: email.attrs?.flags || [],
-                  labels: email.attrs?.['x-gm-labels'] || [],
-                  read: email.attrs?.flags?.includes('\\Seen') || false,
-                  starred: email.attrs?.flags?.includes('\\Flagged') || false
-                };
-
-                // Push to array instead of using Map
-                allEmails.push(processed);
-              });
-            });
-
-            fetch.once('error', (err) => {
-              console.error('Fetch error:', err);
-              reject(err);
-            });
-
-            fetch.once('end', () => {
-              imap.end();
-              
-              // Sort the array directly
-              const sortedEmails = allEmails.sort((a, b) => 
-                new Date(b.date) - new Date(a.date)
-              );
-
-              resolve({
-                success: true,
-                emails: sortedEmails,
-                pagination: {
-                  total: box.messages.total,
-                  pages: Math.ceil(box.messages.total / limit),
-                  current: page,
-                  hasMore: end > 1
+            // Process all messages using processMessage
+            const processedEmails = await Promise.all(
+              messages.map(async (msg) => {
+                try {
+                  const processed = await processMessage(msg.buffer, msg.attrs);
+                  return {
+                    id: msg.attrs?.uid?.toString(),
+                    ...processed,
+                    flags: msg.attrs?.flags || [],
+                    labels: msg.attrs?.['x-gm-labels'] || []
+                  };
+                } catch (error) {
+                  console.error('Error processing message:', error);
+                  return null;
                 }
-              });
+              })
+            );
+
+            imap.end();
+            resolve({
+              success: true,
+              emails: processedEmails.filter(Boolean), // Remove any null results
+              pagination: {
+                total,
+                pages: Math.ceil(total / limit),
+                current: page,
+                hasMore: end > 1
+              }
             });
-          } catch (err) {
-            console.error('Error creating fetch:', err);
-            reject(err);
+          } catch (error) {
+            imap.end();
+            reject(error);
           }
         });
       });
-
-      imap.once('error', (err) => {
-        console.error('IMAP connection error:', err);
-        reject(err);
-      });
-
-      imap.once('end', () => {
-        console.log('IMAP connection ended');
-      });
-
-      imap.connect();
     });
   } catch (error) {
     console.error('IMAP Error:', error);
@@ -834,3 +781,6 @@ export const bulkMoveToFolder = async (emailIds, userId, folder) => {
     throw new Error(`Failed to move emails to ${folder}`);
   }
 };
+
+const BASE_RETRY_DELAY = 1000; // 1 second
+const MAX_RETRY_DELAY = 30000; // 30 seconds

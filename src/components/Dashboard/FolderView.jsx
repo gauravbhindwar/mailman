@@ -128,16 +128,16 @@ export default function FolderView({ folder, title }) {
 
   return (
     <div className="h-screen flex flex-col">
-      <motion.div 
-        initial={{ y: -20, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        className="flex justify-between items-center p-4 border-b bg-white"
-      >
+    <motion.div 
+          initial={{ y: -30, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          className="flex justify-between items-center p-6 border-b bg-gradient-to-r from-orange-300 to-purple-400 shadow-lg"
+        >
         <h2 className="text-xl font-bold">{title}</h2>
         <Link 
-          href="/dashboard/compose" 
-          className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
-        >
+              href="/dashboard/compose" 
+              className="bg-gradient-to-r from-green-400 to-blue-500 text-white font-semibold px-6 py-3 rounded-lg shadow-md hover:from-green-500 hover:to-blue-600 transform transition-transform duration-200 hover:scale-105"
+            >
           Compose
         </Link>
       </motion.div>

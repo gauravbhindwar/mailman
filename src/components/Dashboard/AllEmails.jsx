@@ -137,15 +137,15 @@ export default function AllEmailsPage() {
   return (
     <div className="h-screen flex flex-col">
       <motion.div 
-        initial={{ y: -20, opacity: 0 }}
+        initial={{ y: -10, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
-        className="flex justify-between items-center p-4 border-b bg-white"
+        className="flex justify-between items-center p-2 border-b bg-gradient-to-r from-orange-300 to-purple-400 shadow-sm"
       >
-        <h2 className="text-xl font-bold">All Emails</h2>
+        <h2 className="text-lg font-semibold">All Emails</h2>
         <Link 
-          href="/dashboard/compose" 
-          className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
-        >
+              href="/dashboard/compose" 
+              className="bg-gradient-to-r from-green-400 to-blue-500 text-white font-semibold px-4 py-2 rounded-lg shadow-sm hover:from-green-500 hover:to-blue-600 transform transition-transform duration-200 hover:scale-105"
+            >
           Compose
         </Link>
       </motion.div>
