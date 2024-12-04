@@ -3,59 +3,19 @@ import { authOptions } from "../../auth/[...nextauth]/authOptions";
 import { NextResponse } from "next/server";
 import { cache, getCacheKey } from "@/utils/cache";
 import { fetchEmailsIMAP } from "@/utils/emailService";
-import User from "@/models/User";
 import { connect } from "@/lib/dbConfig";
-import { simpleParser } from 'mailparser';
 
 export const runtime = 'nodejs';
 
-const parseEmailContent = async (content) => {
-  if (!content) return null;
-  
-  try {
-    // If content is already parsed
-    if (typeof content === 'object' && (content.html || content.text)) {
-      return content;
-    }
-
-    // Parse only if content is a string
-    if (typeof content === 'string') {  // Fixed 'is' to '==='
-      const buffer = Buffer.from(content);
-      const parsed = await simpleParser(buffer);
-      return {
-        html: parsed.html,
-        text: parsed.text,
-        attachments: parsed.attachments
-      };
-    }
-
-    return {
-      html: '',
-      text: 'Invalid email content',
-      attachments: []
-    };
-  } catch (error) {
-    console.error('Email parsing error:', error);
-    return {
-      html: '',
-      text: String(content) || 'Failed to parse email content',
-      attachments: []
-    };
-  }
-};
-
-// Reduce the default limit for Vercel
-const DEFAULT_LIMIT = 10; // Reduced from 20
-const API_TIMEOUT = 20000; // 20 seconds
+const DEFAULT_LIMIT = 10;
+const API_TIMEOUT = 20000;
 
 export async function GET(request) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT);
-  let isCancelled = false;
   let cacheKey = null;
 
   try {
-    // Get folder from URL path instead of context.params
     const folder = request.url.split('/').pop().split('?')[0];
 
     if (!folder) {
@@ -73,12 +33,10 @@ export async function GET(request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Check if email credentials are available in the session
     if (!session.emailCredentials) {
       return NextResponse.redirect('/dashboard/settings/email');
     }
 
-    // Check cache first
     cacheKey = getCacheKey(session.user.id, folder, page, limit);
     if (!refresh) {
       const cached = cache.get(cacheKey);
@@ -90,7 +48,6 @@ export async function GET(request) {
 
     await connect();
     
-    // Use email credentials from the session
     const result = await fetchEmailsIMAP({
       userId: session.user.id,
       folder,

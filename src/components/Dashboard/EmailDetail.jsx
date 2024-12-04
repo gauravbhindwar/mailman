@@ -227,7 +227,7 @@ const extractContent = (message) => {
 const MessageThread = ({ messages = [], participants = [] }) => (
   <div className="space-y-4 p-6">
     {Array.isArray(messages) && messages.length > 0 ? messages.map((message, index) => {
-      const messageContent = extractContent(message);
+      const messageContent = message.content || message;
       const sender = message.from || message.externalSender || 'Unknown Sender';
       const timestamp = message.date || message.createdAt || new Date();
       const attachments = Array.isArray(message.attachments) ? message.attachments : [];
@@ -283,7 +283,7 @@ const MessageThread = ({ messages = [], participants = [] }) => (
               <div
                 className="message-content text-gray-800"
                 dangerouslySetInnerHTML={{ 
-                  __html: cleanedContent
+                  __html: messageContent ? sanitizeHtml(messageContent) : 'No message content'
                 }}
               />
             </div>
@@ -331,7 +331,16 @@ const MessageThread = ({ messages = [], participants = [] }) => (
       );
     }) : (
       <div className="text-center text-gray-500 py-4">
-        No message content available
+        {email.content ? (
+          <div
+            className="message-content text-gray-800"
+            dangerouslySetInnerHTML={{ 
+              __html: sanitizeHtml(email.content)
+            }}
+          />
+        ) : (
+          'No message content available'
+        )}
       </div>
     )}
   </div>

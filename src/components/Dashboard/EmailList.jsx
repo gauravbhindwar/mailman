@@ -109,14 +109,25 @@ const TagBadge = ({ tag }) => {
 const getPreviewText = (content) => {
   if (!content) return 'No message content';
   
-  if (typeof content === 'object') {
-    content = content.html || content.text || '';
+  try {
+    // Handle HTML content
+    if (content.includes('<')) {
+      const div = document.createElement('div');
+      div.innerHTML = content;
+      content = div.textContent || div.innerText;
+    }
+    
+    // Clean up the text
+    content = content
+      .replace(/\s+/g, ' ')
+      .replace(/[\r\n]+/g, ' ')
+      .trim();
+    
+    return content.substring(0, 100) + (content.length > 100 ? '...' : '');
+  } catch (error) {
+    console.error('Error parsing content:', error);
+    return 'Error displaying content';
   }
-
-  const div = document.createElement('div');
-  div.innerHTML = content;
-  const text = div.textContent || div.innerText || '';
-  return text.trim().substring(0, 60) + (text.length > 60 ? '...' : '');
 };
 
 const formatEmail = (email) => {
@@ -266,9 +277,7 @@ const EmailItem = React.memo(function EmailItem({ email, type, selectedEmails, t
             {formattedEmail.subject || '(No Subject)'}
           </h3>
           <p className="text-sm text-gray-500 line-clamp-2 overflow-hidden">
-            {formattedEmail.messages?.[0]?.content ? 
-              getPreviewText(formattedEmail.messages[0].content) : 
-              getPreviewText(formattedEmail.content)}
+            {getPreviewText(formattedEmail.content || 'No message content')}
           </p>
         </div>
 
