@@ -7,6 +7,8 @@ import User from "@/models/User";
 import { connect } from "@/lib/dbConfig";
 import { simpleParser } from 'mailparser';
 
+export const runtime = 'nodejs';
+
 const parseEmailContent = async (content) => {
   if (!content) return null;
   
@@ -43,78 +45,72 @@ const parseEmailContent = async (content) => {
 };
 
 // Reduce the default limit for Vercel
-const DEFAULT_LIMIT = 20;
-const API_TIMEOUT = 25000; // 25 seconds, leaving buffer for Vercel's 30s limit
+const DEFAULT_LIMIT = 10; // Reduced from 20
+const API_TIMEOUT = 20000; // 20 seconds
 
-export async function GET(req, context) {
-  let timeoutId;
-  
+export async function GET(request, context) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT);
+
   try {
-    const timeoutPromise = new Promise((_, reject) => {
-      timeoutId = setTimeout(() => {
-        reject(new Error('TIMEOUT'));
-      }, API_TIMEOUT);
+    // Wait for params to be resolved
+    const folder = await context.params?.folder;
+
+    if (!folder) {
+      clearTimeout(timeoutId);
+      return NextResponse.json({ error: "Folder parameter is required" }, { status: 400 });
+    }
+
+    const searchParams = new URL(request.url).searchParams;
+    const page = parseInt(searchParams.get('page')) || 1;
+    const limit = Math.min(parseInt(searchParams.get('limit')) || DEFAULT_LIMIT, DEFAULT_LIMIT);
+    const refresh = searchParams.get('refresh') === 'true';
+
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Check cache first
+    const cacheKey = getCacheKey(session.user.id, folder, page, limit);
+    if (!refresh) {
+      const cached = cache.get(cacheKey);
+      if (cached) {
+        clearTimeout(timeoutId);
+        return NextResponse.json({ ...cached, cached: true });
+      }
+    }
+
+    await connect();
+    
+    const user = await User.findById(session.user.id)
+      .select('+emailConfig.smtp.password +emailConfig.imap.password');
+    
+    if (!user?.emailConfig?.imap) {
+      clearTimeout(timeoutId);
+      return NextResponse.json({ error: "EMAIL_NOT_CONFIGURED" }, { status: 400 });
+    }
+
+    // Pass resolved folder to fetchEmailsIMAP
+    const result = await fetchEmailsIMAP({
+      emailConfig: user.emailConfig,
+      folder,
+      page,
+      limit
     });
 
-    const resultPromise = (async () => {
-      const { folder } = context.params;
-      const searchParams = new URL(req.url).searchParams;
-      
-      // Enforce smaller limit for Vercel
-      const page = parseInt(searchParams.get('page')) || 1;
-      const limit = Math.min(parseInt(searchParams.get('limit')) || DEFAULT_LIMIT, DEFAULT_LIMIT);
-      const refresh = searchParams.get('refresh') === 'true';
+    if (result.success) {
+      cache.set(cacheKey, result, 60);
+    }
 
-      const session = await getServerSession(authOptions);
-      if (!session?.user?.id) {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-      }
-
-      // Check cache first
-      const cacheKey = getCacheKey(session.user.id, folder, page, limit);
-      if (!refresh) {
-        const cached = cache.get(cacheKey);
-        if (cached) {
-          return NextResponse.json({ ...cached, cached: true });
-        }
-      }
-
-      await connect();
-      
-      const user = await User.findById(session.user.id)
-        .select('+emailConfig.smtp.password +emailConfig.imap.password');
-      
-      if (!user?.emailConfig?.imap) {
-        return NextResponse.json(
-          { error: "EMAIL_NOT_CONFIGURED" }, 
-          { status: 400 }
-        );
-      }
-
-      // Fetch emails with timeout awareness
-      const result = await fetchEmailsIMAP(user, folder, page, limit);
-      
-      if (result.success) {
-        cache.set(cacheKey, result, 60); // Cache for 1 minute
-      }
-
-      return NextResponse.json(result);
-    })();
-
-    const result = await Promise.race([resultPromise, timeoutPromise]);
     clearTimeout(timeoutId);
-    return result;
+    return NextResponse.json(result);
 
   } catch (error) {
     clearTimeout(timeoutId);
-    
-    console.error('Email API Error:', {
-      message: error.message,
-      code: error.code
-    });
+    console.error('Email API Error:', error);
 
-    // Special handling for timeouts
-    if (error.message === 'TIMEOUT') {
+    if (error.name === 'AbortError' || error.message === 'Operation timed out') {
       return NextResponse.json({
         error: 'Request timeout - please try again',
         code: 'TIMEOUT'
@@ -123,8 +119,7 @@ export async function GET(req, context) {
 
     return NextResponse.json({
       error: 'Failed to fetch emails',
-      details: error.message,
-      code: error.code || 'UNKNOWN_ERROR'
+      details: error.message
     }, { status: 500 });
   }
 }
