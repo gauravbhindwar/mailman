@@ -13,6 +13,29 @@ const fetcher = async (url) => {
   return res.json();
 };
 
+const getPreviewText = (email) => {
+  if (!email) return '';
+
+  let content = '';
+
+  // Extract content from various possible formats
+  if (typeof email.content === 'string') {
+    content = email.content;
+  } else if (email.content?.html || email.content?.text) {
+    content = email.content.html || email.content.text;
+  } else if (email.messages?.[0]?.content) {
+    content = typeof email.messages[0].content === 'string' 
+      ? email.messages[0].content 
+      : email.messages[0].content.html || email.messages[0].content.text;
+  }
+
+  // Strip HTML tags and get plain text
+  const div = document.createElement('div');
+  div.innerHTML = content;
+  const text = div.textContent || div.innerText || '';
+  return text.trim().substring(0, 100) + (text.length > 100 ? '...' : '');
+};
+
 function FolderEmails({ userId, folder, page, setPage, showAll }) {
   const [selectedEmails, setSelectedEmails] = useState([]);
   const limit = 50;
@@ -48,7 +71,7 @@ function FolderEmails({ userId, folder, page, setPage, showAll }) {
 
   useEffect(() => {
     handleRefresh();
-  }, [page]);
+  }, [handleRefresh]); // Added handleRefresh
 
   if (isLoading) {
     return <div>Loading...</div>;
@@ -58,8 +81,11 @@ function FolderEmails({ userId, folder, page, setPage, showAll }) {
     return <div>Email not configured</div>;
   }
 
-  // Add safety check for emails
-  const emails = Array.isArray(data?.emails) ? data.emails : [];
+  // Update email mapping to include content
+  const emails = Array.isArray(data?.emails) ? data.emails.map(email => ({
+    ...email,
+    previewText: getPreviewText(email)
+  })) : [];
   const totalPages = data?.pagination?.pages || 1;
 
   return (

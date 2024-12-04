@@ -26,6 +26,7 @@ const iconMap = {
 export default function Navigation({ items }) {
   const pathname = usePathname();
 
+
   return (
     <nav className="w-64 bg-white border-r border-gray-200 pt-5 pb-4 flex flex-col">
       <div className="flex-1">

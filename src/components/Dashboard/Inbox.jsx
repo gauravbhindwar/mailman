@@ -222,21 +222,39 @@ function PaginationBar({ currentPage, totalPages, onPageChange }) {
 function InboxEmailList({ userId, page, setPage, showAll }) {
   const [selectedEmails, setSelectedEmails] = useState([]);
   const folder = showAll ? 'all' : 'inbox';
-  const limit = 50; // emails per page
-  
+  const limit = 50;
+
   const { data, error, isLoading, mutate } = useSWR(
     `/api/emails/${folder}?page=${page}&limit=${limit}`,
     fetcher,
     {
       revalidateOnFocus: false,
-      dedupingInterval: 0, // Disable deduplication
-      suspense: false, // Remove suspense
+      dedupingInterval: 0,
+      suspense: false,
       keepPreviousData: true,
       onError: (err) => {
         console.error('Fetch error:', err);
       }
     }
   );
+
+  const handleRefresh = useCallback(() => {
+    return mutate(
+      `/api/emails/${folder}?page=${page}&limit=${limit}&refresh=true&t=${Date.now()}`,
+      undefined, 
+      { revalidate: true }
+    ).catch(err => {
+      console.error('Refresh failed:', err);
+    });
+  }, [mutate, folder, page, limit]);
+
+  // Single refresh effect
+  useEffect(() => {
+    handleRefresh();
+    const handleBrowserRefresh = () => handleRefresh();
+    window.addEventListener('beforeunload', handleBrowserRefresh);
+    return () => window.removeEventListener('beforeunload', handleBrowserRefresh);
+  }, [handleRefresh]);
 
   // Prefetch next page
   useEffect(() => {
@@ -245,44 +263,6 @@ function InboxEmailList({ userId, page, setPage, showAll }) {
       fetcher(`/api/emails/${folder}?page=${nextPage}&limit=${limit}`);
     }
   }, [data, page, folder, limit]);
-
-  const handleRefresh = useCallback(async () => {
-    try {
-      // Add refresh parameter and timestamp to bust cache
-      await mutate(
-        `/api/emails/${folder}?page=${page}&limit=${limit}&refresh=true&t=${Date.now()}`,
-        undefined, 
-        { revalidate: true }
-      );
-    } catch (err) {
-      console.error('Refresh failed:', err);
-    }
-  }, [mutate, folder, page, limit]);
-
-  // Auto-refresh on mount and browser refresh
-  useEffect(() => {
-    handleRefresh();
-  }, []); // Only run once on mount
-
-  // Add event listener for browser refresh
-  useEffect(() => {
-    const handleBrowserRefresh = (e) => {
-      handleRefresh();
-    };
-
-    window.addEventListener('beforeunload', handleBrowserRefresh);
-    return () => window.removeEventListener('beforeunload', handleBrowserRefresh);
-  }, [handleRefresh]);
-
-  useEffect(() => {
-    handleRefresh();
-  }, [page]);
-
-  useEffect(() => {
-    if (data?.success === false && !data?.error) {
-      handleRefresh();
-    }
-  }, [data]);
 
   if (isLoading) {
     return (

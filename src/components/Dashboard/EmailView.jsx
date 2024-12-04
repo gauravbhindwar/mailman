@@ -36,10 +36,36 @@ const sanitizeHtml = (html) => {
   });
 };
 
+const extractContent = (message) => {
+  if (!message) return '';
+  
+  // Handle different content formats
+  if (typeof message === 'string') return message;
+  
+  // If message is the content object itself
+  if (message.html || message.text) {
+    return message.html || message.text;
+  }
+  
+  // If content is nested in content property
+  if (message.content) {
+    if (typeof message.content === 'string') return message.content;
+    return message.content.html || message.content.text || '';
+  }
+  
+  // If content is in body property
+  if (message.body) {
+    if (typeof message.body === 'string') return message.body;
+    return message.body.html || message.body.text || '';
+  }
+  
+  return '';
+};
+
 export default function EmailView({ email }) {
   if (!email) return <div className="p-4">Email not found</div>;
 
-  const content = email.content?.html || email.content?.text || email.content || '';
+  const content = extractContent(email);
 
   return (
     <div className="flex flex-col h-full bg-white rounded-lg shadow-sm">
