@@ -53,6 +53,7 @@ export async function GET(request) {
   const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT);
   let isCancelled = false;
   let cacheKey = null;
+  let user = null; // Define user variable here
 
   try {
     // Get folder from URL path instead of context.params
@@ -85,7 +86,7 @@ export async function GET(request) {
 
     await connect();
     
-    const user = await User.findById(session.user.id)
+    user = await User.findById(session.user.id)
       .select('+emailConfig.smtp.password +emailConfig.imap.password');
     
     if (!user?.emailConfig?.imap) {
@@ -93,9 +94,9 @@ export async function GET(request) {
       return NextResponse.json({ error: "EMAIL_NOT_CONFIGURED" }, { status: 400 });
     }
 
-    // Pass resolved folder to fetchEmailsIMAP
+    // Pass userId to fetchEmailsIMAP
     const result = await fetchEmailsIMAP({
-      emailConfig: user.emailConfig,
+      userId: session.user.id,
       folder,
       page,
       limit
@@ -111,6 +112,19 @@ export async function GET(request) {
   } catch (error) {
     clearTimeout(timeoutId);
     console.error('Email API Error:', error);
+
+    if (error.message === 'Invalid credentials (Failure)') {
+      if (user) {
+        console.error('Invalid credentials:', {
+          user: user.emailConfig.imap.user,
+          host: user.emailConfig.imap.host
+        });
+      }
+      return NextResponse.json({
+        error: 'Invalid email credentials - please check your email settings',
+        code: 'INVALID_CREDENTIALS'
+      }, { status: 401 });
+    }
 
     if (error.name === 'AbortError' || error.message === 'Operation timed out') {
       return NextResponse.json({

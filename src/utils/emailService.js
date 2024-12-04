@@ -371,64 +371,100 @@ const FOLDER_MAPPING = {
 const CONNECTION_POOL_SIZE = 5;
 const CONNECTION_TIMEOUT = 1000 * 60 * 5; // 5 minutes
 
-// Optimize IMAP connection pooling
-const getImapConnection = async (userConfig) => {
-  try {
-    const poolKey = `${userConfig.imap.user}:${Date.now()}`;
-    
-    const password = userConfig.imap.password.includes(':') 
-      ? await decrypt(userConfig.imap.password)
-      : userConfig.imap.password;
-    
-    const imapConfig = {
-      user: userConfig.imap.user,
-      password,
-      ...(userConfig.imap.user.toLowerCase().endsWith('@gmail.com') ? {
-        host: 'imap.gmail.com',
-        port: 993,
-        tls: true,
-        tlsOptions: { 
-          rejectUnauthorized: false,
-          servername: 'imap.gmail.com'
-        }
-      } : {
-        host: userConfig.imap.host,
-        port: userConfig.imap.port,
-        tls: true,
-        tlsOptions: { rejectUnauthorized: false }
-      }),
-      keepalive: false,
-      connTimeout: CONNECTION_TIMEOUT,
-      authTimeout: CONNECTION_TIMEOUT
+// Function to fetch and decrypt email credentials
+const fetchAndDecryptEmailCredentials = async (userId) => {
+  const cacheKey = `emailCredentials:${userId}`;
+  let credentials = cache.get(cacheKey);
+
+  if (!credentials) {
+    const user = await User.findById(userId)
+      .select('+emailConfig.smtp.password +emailConfig.imap.password');
+
+    if (!user?.emailConfig) {
+      throw new Error('Email configuration not found');
+    }
+
+    credentials = {
+      smtp: {
+        host: user.emailConfig.smtp.host,
+        port: user.emailConfig.smtp.port,
+        secure: user.emailConfig.smtp.secure,
+        user: user.emailConfig.smtp.user,
+        password: decrypt(user.emailConfig.smtp.password)
+      },
+      imap: {
+        host: user.emailConfig.imap.host,
+        port: user.emailConfig.imap.port,
+        user: user.emailConfig.imap.user,
+        password: decrypt(user.emailConfig.imap.password)
+      }
     };
-    
-    const connection = new Imap(imapConfig);
-    
-    // Add abort controller for timeout
-    const abortController = new AbortController();
-    const timeoutId = setTimeout(() => {
-      abortController.abort();
-      connection.end();
-    }, OPERATION_TIMEOUT);
 
-    connection.once('error', (err) => {
-      clearTimeout(timeoutId);
-      console.error('IMAP connection error:', err);
-      connection.end();
-      imapConnectionPool.delete(poolKey);
+    cache.set(cacheKey, credentials, 300); // Cache for 5 minutes
+  }
+
+  return credentials;
+};
+
+// Optimize IMAP connection pooling
+const getImapConnection = async (userId) => {
+  const attempts = { count: 0 };
+  const userConfig = await fetchAndDecryptEmailCredentials(userId);
+
+  const tryConnection = async () => {
+    const connection = new Imap({
+      ...GMAIL_IMAP_CONFIG,
+      user: userConfig.imap.user,
+      password: userConfig.imap.password,
+      authTimeout: CONNECTION_TIMEOUT,
+      connTimeout: CONNECTION_TIMEOUT
     });
 
-    connection.once('end', () => {
-      clearTimeout(timeoutId);
-      imapConnectionPool.delete(poolKey);
+    return new Promise((resolve, reject) => {
+      const connectTimeout = setTimeout(() => {
+        connection.end();
+        reject(new Error('Connection timeout'));
+      }, CONNECTION_TIMEOUT);
+
+      connection.once('ready', () => {
+        clearTimeout(connectTimeout);
+        resolve(connection);
+      });
+
+      connection.once('error', (err) => {
+        clearTimeout(connectTimeout);
+        connection.end();
+        if (err.textCode === 'AUTHENTICATIONFAILED') {
+          console.error('Invalid credentials:', {
+            user: userConfig.imap.user,
+            host: userConfig.imap.host
+          });
+          reject(new Error('Invalid credentials (Failure)'));
+        } else {
+          reject(err);
+        }
+      });
+
+      connection.connect();
     });
+  };
 
-    imapConnectionPool.set(poolKey, connection);
-
-    return connection;
-  } catch (error) {
-    console.error('IMAP Connection Error:', error);
-    throw new Error(`IMAP Connection failed: ${error.message}`);
+  // Implement retry logic
+  while (attempts.count < MAX_RETRIES) {
+    try {
+      return await tryConnection();
+    } catch (error) {
+      attempts.count++;
+      if (attempts.count === MAX_RETRIES) throw error;
+      
+      // Calculate exponential backoff with jitter
+      const delay = Math.min(
+        BASE_RETRY_DELAY * Math.pow(2, attempts.count - 1) + Math.random() * 1000,
+        MAX_RETRY_DELAY
+      );
+      
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
   }
 };
 
@@ -441,28 +477,24 @@ const DEFAULT_FETCH_OPTIONS = {
   flags: true
 };
 
-const OPERATION_TIMEOUT = 20000; // 20 seconds
+const OPERATION_TIMEOUT = 120000; // Increase to 120 seconds (2 minutes)
 const BATCH_SIZE = 10; // Number of emails to fetch per batch
 const CONCURRENT_BATCHES = 2; // Number of concurrent batch operations
 
 // Optimize fetchEmailsIMAP function
-export const fetchEmailsIMAP = async ({ emailConfig, folder = 'inbox', page = 1, limit = 20 }) => {
+export const fetchEmailsIMAP = async ({ userId, folder = 'inbox', page = 1, limit = 20, signal }) => {
   let imap = null;
-  const timeoutPromise = new Promise((_, reject) => 
-    setTimeout(() => reject(new Error('Operation timed out')), OPERATION_TIMEOUT)
-  );
+  let isAborting = false;
 
   try {
-    if (!emailConfig?.imap) {
-      throw new Error('IMAP configuration not found');
-    }
+    const userConfig = await fetchAndDecryptEmailCredentials(userId);
 
     // Validate IMAP config directly
     const missingFields = [];
-    if (!emailConfig.imap.host) missingFields.push('IMAP Host');
-    if (!emailConfig.imap.port) missingFields.push('IMAP Port');
-    if (!emailConfig.imap.user) missingFields.push('Username');
-    if (!emailConfig.imap.password) missingFields.push('Password');
+    if (!userConfig.imap.host) missingFields.push('IMAP Host');
+    if (!userConfig.imap.port) missingFields.push('IMAP Port');
+    if (!userConfig.imap.user) missingFields.push('Username');
+    if (!userConfig.imap.password) missingFields.push('Password');
 
     if (missingFields.length > 0) {
       throw new Error(
@@ -472,130 +504,143 @@ export const fetchEmailsIMAP = async ({ emailConfig, folder = 'inbox', page = 1,
 
     // Log configuration without sensitive data
     console.log('🔑 IMAP Configuration:', {
-      host: emailConfig.imap.host,
-      port: emailConfig.imap.port,
-      user: emailConfig.imap.user,
-      hasPassword: !!emailConfig.imap.password,
-      isGmail: emailConfig.imap.user?.toLowerCase().endsWith('@gmail.com')
+      host: userConfig.imap.host,
+      port: userConfig.imap.port,
+      user: userConfig.imap.user,
+      hasPassword: !!userConfig.imap.password,
+      isGmail: userConfig.imap.user?.toLowerCase().endsWith('@gmail.com')
     });
 
-    imap = await getImapConnection(emailConfig);
+    imap = await getImapConnection(userId);
     
-    const fetchPromise = new Promise((resolve, reject) => {
-      const emails = [];
-      
-      imap.once('ready', () => {
-        const folderPath = FOLDER_MAPPING[folder.toLowerCase()] || folder;
+    if (signal) {
+      signal.addEventListener('abort', () => {
+        isAborting = true;
+        imap?.end();
+      });
+    }
+
+    const result = await Promise.race([
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Operation timed out')), OPERATION_TIMEOUT)
+      ),
+      new Promise((resolve, reject) => {
+        const emails = [];
         
-        imap.openBox(folderPath, false, async (err, box) => {
-          if (err) {
-            imap.end();
-            return reject(err);
-          }
-
-          const total = box.messages.total;
-          const start = Math.max(1, total - ((page - 1) * limit));
-          const end = Math.max(1, start - limit);
-
-          // Split into smaller batches
-          const batches = [];
-          for (let i = end; i <= start; i += BATCH_SIZE) {
-            const batchEnd = Math.min(i + BATCH_SIZE - 1, start);
-            batches.push(`${i}:${batchEnd}`);
-          }
-
-          try {
-            // Process batches with concurrency limit
-            const processBatch = async (sequence) => {
-              return new Promise((resolve) => {
-                const batchEmails = [];
-                const fetch = imap.seq.fetch(sequence, {
-                  bodies: ['HEADER.FIELDS (FROM TO SUBJECT DATE)'],
-                  struct: true,
-                  envelope: true
-                });
-
-                fetch.on('message', (msg, seqno) => {
-                  const email = { seqno };
-
-                  msg.on('body', (stream) => {
-                    let buffer = '';
-                    stream.on('data', (chunk) => {
-                      buffer += chunk.toString('utf8');
-                    });
-                    stream.once('end', () => {
-                      email.headers = Imap.parseHeader(buffer);
-                    });
-                  });
-
-                  msg.once('attributes', (attrs) => {
-                    email.attrs = attrs;
-                  });
-
-                  msg.once('end', () => {
-                    batchEmails.push(email);
-                  });
-                });
-
-                fetch.once('error', (err) => {
-                  console.error('Batch fetch error:', err);
-                  resolve([]); // Continue with empty result on error
-                });
-
-                fetch.once('end', () => {
-                  resolve(batchEmails);
-                });
-              });
-            };
-
-            // Process batches with limited concurrency
-            const results = [];
-            for (let i = 0; i < batches.length; i += CONCURRENT_BATCHES) {
-              const batchPromises = batches
-                .slice(i, i + CONCURRENT_BATCHES)
-                .map(processBatch);
-              const batchResults = await Promise.all(batchPromises);
-              results.push(...batchResults.flat());
+        imap.once('ready', () => {
+          if (isAborting) return;
+          const folderPath = FOLDER_MAPPING[folder.toLowerCase()] || folder;
+          
+          imap.openBox(folderPath, false, async (err, box) => {
+            if (err || isAborting) {
+              imap.end();
+              return reject(err || new Error('Operation aborted'));
             }
 
-            imap.end();
-            resolve({
-              success: true,
-              emails: results
-                .sort((a, b) => b.seqno - a.seqno)
-                .map(email => ({
-                  id: email.attrs?.uid?.toString() || email.seqno.toString(),
-                  from: email.headers?.from?.[0] || '',
-                  to: email.headers?.to?.[0] || '',
-                  subject: email.headers?.subject?.[0] || '(No Subject)',
-                  date: email.headers?.date?.[0] || new Date().toISOString(),
-                  flags: email.attrs?.flags || [],
-                  labels: email.attrs?.['x-gm-labels'] || [],
-                })),
-              pagination: {
-                total: box.messages.total,
-                pages: Math.ceil(box.messages.total / limit),
-                current: page,
-                hasMore: end > 1
+            const total = box.messages.total;
+            const start = Math.max(1, total - ((page - 1) * limit));
+            const end = Math.max(1, start - limit);
+
+            console.log(`📥 Fetching emails from ${start} to ${end} in folder ${folderPath}`);
+
+            // Split into smaller batches
+            const batches = [];
+            for (let i = end; i <= start; i += BATCH_SIZE) {
+              const batchEnd = Math.min(i + BATCH_SIZE - 1, start);
+              batches.push(`${i}:${batchEnd}`);
+            }
+
+            try {
+              // Process batches with concurrency limit
+              const processBatch = async (sequence) => {
+                return new Promise((resolve) => {
+                  const batchEmails = [];
+                  const fetch = imap.seq.fetch(sequence, {
+                    bodies: ['HEADER.FIELDS (FROM TO SUBJECT DATE)'],
+                    struct: true,
+                    envelope: true
+                  });
+
+                  fetch.on('message', (msg, seqno) => {
+                    const email = { seqno };
+
+                    msg.on('body', (stream) => {
+                      let buffer = '';
+                      stream.on('data', (chunk) => {
+                        buffer += chunk.toString('utf8');
+                      });
+                      stream.once('end', () => {
+                        email.headers = Imap.parseHeader(buffer);
+                      });
+                    });
+
+                    msg.once('attributes', (attrs) => {
+                      email.attrs = attrs;
+                    });
+
+                    msg.once('end', () => {
+                      batchEmails.push(email);
+                    });
+                  });
+
+                  fetch.once('error', (err) => {
+                    console.error('Batch fetch error:', err);
+                    resolve([]); // Continue with empty result on error
+                  });
+
+                  fetch.once('end', () => {
+                    resolve(batchEmails);
+                  });
+                });
+              };
+
+              // Process batches with limited concurrency
+              const results = [];
+              for (let i = 0; i < batches.length; i += CONCURRENT_BATCHES) {
+                const batchPromises = batches
+                  .slice(i, i + CONCURRENT_BATCHES)
+                  .map(processBatch);
+                const batchResults = await Promise.all(batchPromises);
+                results.push(...batchResults.flat());
               }
-            });
-          } catch (err) {
-            imap.end();
-            reject(err);
-          }
+
+              imap.end();
+              resolve({
+                success: true,
+                emails: results
+                  .sort((a, b) => b.seqno - a.seqno)
+                  .map(email => ({
+                    id: email.attrs?.uid?.toString() || email.seqno.toString(),
+                    from: email.headers?.from?.[0] || '',
+                    to: email.headers?.to?.[0] || '',
+                    subject: email.headers?.subject?.[0] || '(No Subject)',
+                    date: email.headers?.date?.[0] || new Date().toISOString(),
+                    flags: email.attrs?.flags || [],
+                    labels: email.attrs?.['x-gm-labels'] || [],
+                  })),
+                pagination: {
+                  total: box.messages.total,
+                  pages: Math.ceil(box.messages.total / limit),
+                  current: page,
+                  hasMore: end > 1
+                }
+              });
+            } catch (err) {
+              imap.end();
+              reject(err);
+            }
+          });
         });
-      });
 
-      imap.once('error', (err) => {
-        reject(err);
-      });
+        imap.once('error', (err) => {
+          reject(err);
+        });
 
-      imap.connect();
-    });
+        imap.connect();
+      })
+    ]);
 
-    // Race between timeout and fetch operation
-    return await Promise.race([fetchPromise, timeoutPromise]);
-    
+    return result;
   } catch (error) {
     if (imap?.end) imap.end();
     throw error;
@@ -834,3 +879,6 @@ export const bulkMoveToFolder = async (emailIds, userId, folder) => {
     throw new Error(`Failed to move emails to ${folder}`);
   }
 };
+
+const BASE_RETRY_DELAY = 1000; // 1 second
+const MAX_RETRY_DELAY = 30000; // 30 seconds
