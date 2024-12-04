@@ -22,7 +22,7 @@ export default async function DashboardLayout({ children }) {
     <div className="h-screen flex flex-col">
       <Header />
       <div className="flex flex-1 overflow-hidden">
-        <Navigation items={navItems} isAuthenticated={!!session} />
+        <Navigation items={navItems} />
         <main className="flex-1 overflow-y-auto bg-gray-50">
           {children}
         </main>
