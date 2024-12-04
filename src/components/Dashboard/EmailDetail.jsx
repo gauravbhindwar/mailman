@@ -564,22 +564,33 @@ export default function EmailDetail({ email, onClose }) {
     labels: Array.isArray(email.labels) ? email.labels : []
   };
 
+  const safelyEncodeData = (data) => {
+    try {
+      const jsonString = JSON.stringify(data);
+      // Use URL-safe base64 encoding
+      return btoa(jsonString)
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+    } catch (error) {
+      console.error('Error encoding data:', error);
+      throw new Error('Failed to encode email data');
+    }
+  };
+
   const handleReply = () => {
     const originalMessage = email.messages?.[0];
+    // Extract email from the "from" field more reliably
+    const fromStr = originalMessage?.from || email.from || '';
+    let replyToEmail = fromStr.match(/<([^>]+)>|([^\s]+@[^\s]+)/)?.[1] || fromStr;
+
     const replyData = {
-      to: originalMessage?.from || email.from,
+      to: replyToEmail,
       subject: `Re: ${email.subject}`,
-      content: `
-        <br/>
-        <div class="quoted-text">
-          On ${formatEmailDate(originalMessage?.date || email.date)}, ${originalMessage?.from || email.from} wrote:
-          <br/><br/>
-          ${sanitizeHtml(originalMessage?.content || email.content)}
-        </div>
-      `.trim()
+      content: `<div class="quoted-text">On ${formatEmailDate(originalMessage?.date || email.date)}, ${fromStr} wrote:<br/><br/>${sanitizeHtml(originalMessage?.content || email.content)}</div>`
     };
     
-    const encodedData = btoa(unescape(encodeURIComponent(JSON.stringify(replyData))));
+    const encodedData = safelyEncodeData(replyData);
     router.push(`/dashboard/compose?reply=${encodedData}`);
     onClose();
   };
@@ -599,7 +610,7 @@ export default function EmailDetail({ email, onClose }) {
       `.trim()
     };
     
-    const encodedData = btoa(unescape(encodeURIComponent(JSON.stringify(forwardData))));
+    const encodedData = safelyEncodeData(forwardData);
     router.push(`/dashboard/compose?forward=${encodedData}`);
     onClose();
   };

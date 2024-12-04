@@ -272,8 +272,11 @@ const EmailItem = React.memo(function EmailItem({ email, type, selectedEmails, t
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between mb-1">
             <div className="flex items-center gap-2">
-              <span className="font-medium">
+              <span className="font-medium text-gray-900">
                 {senderInfo.name}
+                <span className="ml-2 text-sm text-gray-500">
+                  ({senderInfo.email})
+                </span>
               </span>
               <TagBadge tag={messageTag} />
             </div>

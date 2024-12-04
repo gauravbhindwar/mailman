@@ -26,37 +26,50 @@ export default function ComposeEmail() {
   useEffect(() => {
     const replyData = searchParams.get('reply');
     const forwardData = searchParams.get('forward');
+    
+    const parseEmailData = (encodedData, isForward = false) => {
+      try {
+        let decodedStr;
+        try {
+          decodedStr = atob(encodedData.replace(/-/g, '+').replace(/_/g, '/'));
+        } catch {
+          throw new Error('Invalid email data encoding');
+        }
+
+        const decoded = JSON.parse(decodedStr);
+        
+        // Set the email data with proper HTML formatting
+        setEmailData({
+          to: isForward ? '' : decoded.to || '',
+          subject: decoded.subject || '',
+          content: decoded.content || ''  // Keep the HTML content as is
+        });
+
+        // Set focus to editor after content is set
+        setTimeout(() => {
+          const editorDiv = document.querySelector('[contenteditable="true"]');
+          if (editorDiv) {
+            editorDiv.focus();
+            // Place cursor at start of editor
+            const range = document.createRange();
+            const sel = window.getSelection();
+            range.setStart(editorDiv, 0);
+            range.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(range);
+          }
+        }, 100);
+
+      } catch (error) {
+        console.error(`Error parsing email data:`, error);
+        setError(`Failed to parse email data. Please try composing a new email.`);
+      }
+    };
 
     if (replyData) {
-      try {
-        // Properly decode base64 and handle special characters
-        const decodedStr = decodeURIComponent(escape(atob(replyData)));
-        const decoded = JSON.parse(decodedStr);
-        setEmailData({
-          to: decoded.to || '',
-          subject: decoded.subject || '',
-          content: decoded.content || ''
-        });
-      } catch (error) {
-        console.error('Error parsing reply data:', error);
-        setError('Invalid reply data');
-      }
-    }
-
-    if (forwardData) {
-      try {
-        // Properly decode base64 and handle special characters
-        const decodedStr = decodeURIComponent(escape(atob(forwardData)));
-        const decoded = JSON.parse(decodedStr);
-        setEmailData({
-          to: '', // Forward requires manual input of recipient
-          subject: decoded.subject || '',
-          content: decoded.content || ''
-        });
-      } catch (error) {
-        console.error('Error parsing forward data:', error);
-        setError('Invalid forward data');
-      }
+      parseEmailData(replyData, false);
+    } else if (forwardData) {
+      parseEmailData(forwardData, true);
     }
   }, [searchParams]);
 
