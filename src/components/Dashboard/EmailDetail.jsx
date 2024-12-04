@@ -1,5 +1,6 @@
 "use client"
 import { useState } from 'react';
+import Image from 'next/image';
 import { motion, AnimatePresence } from 'framer-motion';
 import dynamic from 'next/dynamic';
 import { MdReply, MdForward, MdDelete, MdArchive, MdClose, MdStar, MdLabel, MdSchedule, MdMoreVert, MdPrint, MdAttachment, MdOpenInNew } from 'react-icons/md';
@@ -9,6 +10,88 @@ import DOMPurify from 'dompurify';
 
 // Dynamic import of the rich text editor
 const RichTextEditor = dynamic(() => import('../RichTextEditor'), { ssr: false });
+
+// Add these helper functions
+const getSenderInfo = (email) => {
+  if (!email) return { name: 'Unknown', email: '' };
+
+  const emailRegex = /^(.*?)?(?:\s*<(.+?)>)?$/;
+  const fromField = email.from || '';
+  const matches = fromField.match(emailRegex);
+
+  if (matches) {
+    const [_, name, emailAddr] = matches;
+    return {
+      name: name?.trim().replace(/["']/g, '') || emailAddr?.split('@')?.[0] || 'Unknown',
+      email: emailAddr || fromField || ''
+    };
+  }
+
+  const emailParts = fromField.split('@');
+  return {
+    name: emailParts[0] || 'Unknown',
+    email: fromField || ''
+  };
+};
+
+const getMessageTag = (email) => {
+  if (email.status) return email.status;
+  if (email.flags?.includes('\\Draft')) return 'draft';
+  if (email.labels?.includes('\\Spam')) return 'spam';
+  if (email.labels?.includes('\\Trash')) return 'trash';
+  if (email.labels?.includes('\\Starred')) return 'starred';
+  return 'inbox';
+};
+
+const TagBadge = ({ tag }) => {
+  const tagColors = {
+    received: 'bg-blue-100 text-blue-800 border border-blue-200',
+    sent: 'bg-green-100 text-green-800 border border-green-200',
+    draft: 'bg-yellow-100 text-yellow-800 border border-yellow-200',
+    spam: 'bg-red-100 text-red-800 border border-red-200',
+    trash: 'bg-gray-100 text-gray-800 border border-gray-200',
+    starred: 'bg-purple-100 text-purple-800 border border-purple-200',
+    inbox: 'bg-indigo-100 text-indigo-800 border border-indigo-200',
+    archived: 'bg-gray-100 text-gray-800 border border-gray-200'
+  };
+
+  return (
+    <span className={`text-xs px-2 py-0.5 rounded-full ${tagColors[tag] || tagColors.inbox}`}>
+      {tag.charAt(0).toUpperCase() + tag.slice(1)}
+    </span>
+  );
+};
+
+const getInitials = (name) => {
+  if (!name || typeof name !== 'string') return '?';
+  return name
+    .split(' ')
+    .map(word => word[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2);
+};
+
+const getRandomColor = (str) => {
+  const colors = [
+    'bg-blue-500', 'bg-green-500', 'bg-yellow-500', 
+    'bg-purple-500', 'bg-pink-500', 'bg-indigo-500'
+  ];
+  return colors[str ? str.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0) % colors.length : 0];
+};
+
+const formatEmailDate = (date) => {
+  if (!date) return '';
+  return new Date(date).toLocaleString('en-US', {
+    weekday: 'short',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
+    hour12: true
+  });
+};
 
 const modalAnimation = {
   hidden: { opacity: 0, scale: 0.95 },
@@ -82,110 +165,77 @@ const cleanEmailContent = (content) => {
     .trim();
 };
 
-const formatEmailDate = (dateStr) => {
+const getFormattedDate = (dateStr) => {
   try {
-    const date = new Date(dateStr);
-    if (isNaN(date.getTime())) {
-      return 'Invalid Date';
-    }
-    return date.toLocaleString('en-US', {
-      weekday: 'short',
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
+    return formatDistanceToNow(new Date(dateStr), { addSuffix: true });
   } catch (error) {
-    return dateStr || 'Unknown Date';
+    return 'Invalid date';
   }
 };
 
-const EmailHeader = ({ email, onClose, onReply, onForward }) => (
-  <div className="p-6 border-b bg-white sticky top-0 z-10 shadow-sm">
-    <div className="flex justify-between items-start mb-4">
-      <div className="flex-1 pr-4">
-        <h2 className="text-xl font-semibold text-gray-900 mb-1">
-          {email.subject}
-        </h2>
-        <div className="flex items-center gap-2 text-sm text-gray-500">
-          <span className="bg-gray-100 px-2 py-1 rounded">
-            {email.folder || 'Inbox'}
-          </span>
-          {email.labels?.map(label => (
-            <span key={label} className="bg-blue-50 text-blue-600 px-2 py-1 rounded">
-              {label}
-            </span>
-          ))}
+const EmailHeader = ({ email, onClose, onReply, onForward }) => {
+  const senderInfo = getSenderInfo(email);
+  const messageTag = getMessageTag(email);
+
+  return (
+    <div className="p-6 border-b bg-white sticky top-0 z-10 shadow-sm">
+      <div className="flex justify-between items-start mb-4">
+        <div className="flex-1 pr-4">
+          <h2 className="text-xl font-semibold text-gray-900 mb-1">
+            {email.subject}
+          </h2>
+          <div className="flex items-center gap-2 text-sm">
+            <TagBadge tag={messageTag} />
+            {email.labels?.map(label => (
+              <span key={label} className="bg-blue-50 text-blue-600 px-2 py-1 rounded">
+                {label}
+              </span>
+            ))}
+          </div>
         </div>
-      </div>
-      <div className="flex items-center gap-2">
-        <button className="p-2 hover:bg-gray-100 rounded-full" title="Print">
-          <MdPrint className="w-5 h-5 text-gray-600" />
-        </button>
-        <button className="p-2 hover:bg-gray-100 rounded-full" title="Open in new window">
-          <MdOpenInNew className="w-5 h-5 text-gray-600" />
-        </button>
         <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full">
           <MdClose className="w-5 h-5 text-gray-600" />
         </button>
       </div>
-    </div>
 
-    <div className="flex items-center justify-between">
-      <div className="flex items-center gap-4">
-        <div className="flex -space-x-2">
-          {[email.from, email.to].map((addr, i) => (
-            <div key={i} className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center text-white text-sm font-medium ring-2 ring-white">
-              {addr?.charAt(0)?.toUpperCase()}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white
+            ${getRandomColor(senderInfo.email)}`}>
+            {getInitials(senderInfo.name)}
+          </div>
+          <div>
+            <div className="font-medium text-gray-900">
+              {senderInfo.name} <span className="text-gray-500">({senderInfo.email})</span>
             </div>
-          ))}
-        </div>
-        <div>
-          <div className="font-medium text-gray-900">
-            {email.from}
-            <span className="text-gray-400 mx-2">→</span>
-            {email.to}
-          </div>
-          <div className="text-sm text-gray-500">
-            {new Date(email.date).toLocaleString()} ({formatDistanceToNow(new Date(email.date), { addSuffix: true })})
+            <div className="text-sm text-gray-500">
+              {formatDistanceToNow(new Date(email.date), { addSuffix: true })}
+            </div>
           </div>
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
-        <button className="icon-button" title="Star">
-          <MdStar className="w-5 h-5" />
+      <div className="flex gap-2 mt-4">
+        <button className="action-button primary" onClick={onReply}>
+          <MdReply className="w-5 h-5" />
+          Reply
         </button>
-        <button className="icon-button" title="Label">
-          <MdLabel className="w-5 h-5" />
+        <button className="action-button" onClick={onForward}>
+          <MdForward className="w-5 h-5" />
+          Forward
         </button>
-        <button className="icon-button" title="More">
-          <MdMoreVert className="w-5 h-5" />
+        <button className="action-button">
+          <MdArchive className="w-5 h-5" />
+          Archive
+        </button>
+        <button className="action-button danger">
+          <MdDelete className="w-5 h-5" />
+          Delete
         </button>
       </div>
     </div>
-
-    <div className="flex gap-2 mt-4">
-      <button className="action-button primary" onClick={onReply}>
-        <MdReply className="w-5 h-5" />
-        Reply
-      </button>
-      <button className="action-button" onClick={onForward}>
-        <MdForward className="w-5 h-5" />
-        Forward
-      </button>
-      <button className="action-button">
-        <MdArchive className="w-5 h-5" />
-        Archive
-      </button>
-      <button className="action-button danger">
-        <MdDelete className="w-5 h-5" />
-        Delete
-      </button>
-    </div>
-  </div>
-);
+  );
+};
 
 const AttachmentPreview = ({ attachment }) => (
   <div className="flex items-center gap-2 bg-gray-50 px-3 py-2 rounded-lg hover:bg-gray-100 transition-colors">
@@ -224,125 +274,62 @@ const extractContent = (message) => {
   return '';
 };
 
-const MessageThread = ({ messages = [], participants = [] }) => (
-  <div className="space-y-4 p-6">
-    {Array.isArray(messages) && messages.length > 0 ? messages.map((message, index) => {
-      const messageContent = message.content || message;
-      const sender = message.from || message.externalSender || 'Unknown Sender';
-      const timestamp = message.date || message.createdAt || new Date();
-      const attachments = Array.isArray(message.attachments) ? message.attachments : [];
-
-      // Clean up email content
-      const cleanedContent = sanitizeHtml(cleanEmailContent(messageContent));
-      
-      return (
-        <div key={`message-${index}-${timestamp}`} 
-          className="bg-white rounded-lg shadow-sm hover:shadow-md transition-all duration-200"
-        >
-          {/* Gmail-like header */}
-          <div className="p-4 group">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-medium">
-                  {(typeof sender === 'string' ? sender[0] : '?').toUpperCase()}
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-gray-900">{sender}</span>
-                    <span className="text-xs text-gray-500">
-                      {`<${message.from}>`}
-                    </span>
-                  </div>
-                  <div className="text-sm text-gray-600">
-                    to {message.to}
-                  </div>
-                </div>
-              </div>
-              <div className="flex items-center gap-4">
-                <span className="text-sm text-gray-500">
-                  {formatDistanceToNow(new Date(timestamp), { addSuffix: true })}
-                </span>
-                <div className="hidden group-hover:flex items-center gap-2">
-                  <button className="p-2 hover:bg-gray-100 rounded-full">
-                    <MdStar className="w-5 h-5 text-gray-600" />
-                  </button>
-                  <button className="p-2 hover:bg-gray-100 rounded-full">
-                    <MdReply className="w-5 h-5 text-gray-600" />
-                  </button>
-                  <button className="p-2 hover:bg-gray-100 rounded-full">
-                    <MdMoreVert className="w-5 h-5 text-gray-600" />
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Email content with Gmail-like styling */}
-          <div className="px-16 py-6">
-            <div className="prose prose-sm max-w-none">
-              <div
-                className="message-content text-gray-800"
-                dangerouslySetInnerHTML={{ 
-                  __html: messageContent ? sanitizeHtml(messageContent) : 'No message content'
-                }}
-              />
-            </div>
-
-            {/* Gmail-like attachments */}
-            {attachments.length > 0 && (
-              <div className="mt-6 border-t border-gray-100 pt-4">
-                <div className="text-sm font-medium text-gray-700 mb-3">
-                  {attachments.length} attachment{attachments.length > 1 ? 's' : ''}
-                </div>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  {attachments.map((attachment, i) => (
-                    <div 
-                      key={i}
-                      className="border border-gray-200 rounded-lg p-3 hover:shadow-md transition-shadow"
-                    >
-                      <div className="flex items-center gap-2">
-                        <MdAttachment className="w-5 h-5 text-gray-400" />
-                        <span className="text-sm font-medium text-gray-700 truncate">
-                          {attachment.filename}
-                        </span>
-                      </div>
-                      <div className="mt-2 flex items-center justify-between">
-                        <span className="text-xs text-gray-500">
-                          {Math.round(attachment.size / 1024)} KB
-                        </span>
-                        <button className="text-blue-600 text-sm hover:text-blue-700">
-                          Download
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Quick reply area (Gmail-like) */}
-          <div className="px-16 pb-6">
-            <div className="border rounded-xl p-4 hover:shadow-md transition-shadow cursor-text">
-              <div className="text-gray-600 text-sm">Click here to reply</div>
-            </div>
-          </div>
+const MessageContent = ({ content, images }) => {
+  // Group images into gallery if multiple images
+  const hasMultipleImages = images && images.length > 1;
+  
+  return (
+    <div className="prose prose-sm max-w-none">
+      {hasMultipleImages && (
+        <div className="image-gallery">
+          {images.map((image, index) => (
+            <Image 
+              key={index}
+              src={image.data}
+              alt={image.filename}
+              layout="responsive"
+              width={500}
+              height={300}
+            />
+          ))}
         </div>
-      );
-    }) : (
-      <div className="text-center text-gray-500 py-4">
-        {email.content ? (
-          <div
-            className="message-content text-gray-800"
-            dangerouslySetInnerHTML={{ 
-              __html: sanitizeHtml(email.content)
-            }}
-          />
-        ) : (
-          'No message content available'
-        )}
-      </div>
-    )}
+      )}
+      <div
+        className="message-content text-gray-800"
+        dangerouslySetInnerHTML={{ 
+          __html: content ? sanitizeHtml(content) : 'No message content'
+        }}
+      />
+    </div>
+  );
+};
+
+const parseEmailAddress = (emailStr) => {
+  if (!emailStr) return { name: 'Unknown', email: '' };
+  
+  const matches = emailStr.match(/^(.*?)?(?:\s*<(.+?)>)?$/);
+  if (matches) {
+    const [_, name, email] = matches;
+    return {
+      name: name?.trim() || email?.split('@')?.[0] || 'Unknown',
+      email: email || emailStr
+    };
+  }
+  
+  return {
+    name: emailStr.split('@')[0],
+    email: emailStr
+  };
+};
+
+const MessageThread = ({ messages = [], participants = [] }) => (
+  <div className="p-6">
+    <div className="bg-white rounded-lg p-4">
+      <MessageContent 
+        content={messages[0]?.content || 'No content'} 
+        images={messages[0]?.images || []}
+      />
+    </div>
   </div>
 );
 
@@ -510,6 +497,42 @@ const EmailStyles = () => (
       .email-header {
         font-size: 0.8125rem;
       }
+    }
+
+    /* Image handling */
+    .message-content img {
+      max-width: 100%;
+      height: auto;
+      border-radius: 8px;
+      margin: 1rem 0;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .message-content .image-gallery {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+      margin: 1rem 0;
+    }
+
+    .message-content .image-gallery img {
+      width: 100%;
+      height: 200px;
+      object-fit: cover;
+      margin: 0;
+      cursor: pointer;
+      transition: transform 0.2s;
+    }
+
+    .message-content .image-gallery img:hover {
+      transform: scale(1.05);
+    }
+
+    /* Clean up email markers */
+    .message-content [data-marker],
+    .message-content pre:empty,
+    .message-content div:empty {
+      display: none;
     }
   `}</style>
 );

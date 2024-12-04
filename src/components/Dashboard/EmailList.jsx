@@ -109,25 +109,14 @@ const TagBadge = ({ tag }) => {
 const getPreviewText = (content) => {
   if (!content) return 'No message content';
   
-  try {
-    // Handle HTML content
-    if (content.includes('<')) {
-      const div = document.createElement('div');
-      div.innerHTML = content;
-      content = div.textContent || div.innerText;
-    }
-    
-    // Clean up the text
-    content = content
-      .replace(/\s+/g, ' ')
-      .replace(/[\r\n]+/g, ' ')
-      .trim();
-    
-    return content.substring(0, 100) + (content.length > 100 ? '...' : '');
-  } catch (error) {
-    console.error('Error parsing content:', error);
-    return 'Error displaying content';
+  if (typeof content === 'object') {
+    content = content.html || content.text || '';
   }
+
+  const div = document.createElement('div');
+  div.innerHTML = content;
+  const text = div.textContent || div.innerText || '';
+  return text.trim().substring(0, 60) + (text.length > 60 ? '...' : '');
 };
 
 const formatEmail = (email) => {
@@ -162,45 +151,81 @@ const getSenderDetails = (formattedEmail, type) => {
   return { ...getSenderInfo(formattedEmail, type), isRecipient: false };
 };
 
-const EmailItem = React.memo(function EmailItem({ email, type, selectedEmails, toggleEmailSelection, toggleStar, itemVariants, onClick, showAll }) {
+const parseEmailForDisplay = (emailStr) => {
+  if (!emailStr) return { displayName: 'Unknown', email: '' };
+  
+  const matches = emailStr.match(/^(.*?)?(?:\s*<(.+?)>)?$/);
+  if (matches) {
+    const [_, name, email] = matches;
+    return {
+      displayName: name?.trim() || email?.split('@')[0] || 'Unknown',
+      email: email || emailStr.split('<')[1]?.split('>')[0] || emailStr
+    };
+  }
+  
+  const emailParts = emailStr.split('@');
+  return {
+    displayName: emailParts[0] || 'Unknown',
+    email: emailStr
+  };
+};
+
+const getFormattedDate = (dateStr) => {
+  try {
+    const date = new Date(dateStr);
+    
+    // Format the server timestamp in user's timezone
+    return date.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: 'numeric',
+      hour12: true
+    });
+  } catch (error) {
+    return 'Invalid date';
+  }
+};
+
+const formatDisplayDate = (dateStr) => {
+  try {
+    const date = new Date(dateStr);
+    const now = new Date();
+    
+    // If same year, show MMM D, h:mm A
+    if (date.getFullYear() === now.getFullYear()) {
+      return date.toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: 'numeric',
+        hour12: true
+      });
+    }
+    
+    // If different year, show MMM D, YYYY
+    return date.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric'
+    });
+  } catch (error) {
+    return 'Invalid date';
+  }
+};
+
+const EmailItem = React.memo(function EmailItem({ email, type, selectedEmails, toggleEmailSelection, toggleStar, onClick, showAll }) {
+  const senderInfo = getSenderInfo(email, type);
+  const messageTag = getMessageTag(email, type);
   const formattedEmail = formatEmail(email);
   
   if (!formattedEmail) return null;
 
-  // Direct calculation instead of useMemo
-  const sender = getSenderDetails(formattedEmail, type);
-
-  const lastMessage = formattedEmail.messages?.[formattedEmail.messages.length - 1] || {};
-  const messageDate = formattedEmail.lastMessageAt || formattedEmail.date;
-
-  // Safe date formatting
-  const getFormattedDate = (dateStr) => {
-    try {
-      return formatDistanceToNow(new Date(dateStr), { addSuffix: true });
-    } catch (error) {
-      return 'Invalid date';
-    }
-  };
-
-  // Get preview text without HTML tags
-  const handleClick = (e) => {
-    e.preventDefault(); // Prevent Link navigation
-    onClick(e, formattedEmail);
-  };
-
   return (
-    <motion.div
-      variants={itemAnimation}
-      whileHover={{ 
-        scale: 1.002,
-        backgroundColor: 'rgba(242, 245, 245, 0.8)',
-        transition: { duration: 0.2 }
-      }}
-      className={`group relative ${!formattedEmail.read ? 'bg-blue-50' : 'bg-white'} border-b border-gray-100`}
-    >
-      <div className="flex items-center p-4 cursor-pointer" onClick={handleClick}>
+    <motion.div variants={itemAnimation} className="group relative bg-white border-b border-gray-100">
+      <div className="flex items-center p-4 cursor-pointer" onClick={(e) => onClick(e, formattedEmail)}>
         <div className="flex items-center space-x-2 min-w-[80px]">
-          {/* Selection and Star buttons */}
           <motion.button
             onClick={(e) => {
               e.stopPropagation();
@@ -233,75 +258,58 @@ const EmailItem = React.memo(function EmailItem({ email, type, selectedEmails, t
           </motion.button>
         </div>
 
-        {/* Avatar with hover effect */}
         <motion.div 
           className="mr-4"
           whileHover={{ scale: 1.1 }}
-          transition={{ type: "spring", stiffness: 400, damping: 17 }}
         >
           <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-medium 
-            ${getRandomColor(sender.email)} shadow-md`}
+            ${getRandomColor(senderInfo.email)}`}
           >
-            {getInitials(sender.name)}
+            {getInitials(senderInfo.name)}
           </div>
         </motion.div>
 
-        {/* Email Content with improved layout */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between mb-1">
-            <div className="flex items-center gap-2 flex-wrap">
-              <div className="flex items-center gap-2">
-                <motion.span 
-                  className={`font-medium ${!formattedEmail.read ? 'font-semibold' : ''}`}
-                  whileHover={{ scale: 1.02 }}
-                >
-                  {type === 'sent' ? `To: ${sender.name}` : sender.name}
-                </motion.span>
-                <TagBadge tag={getMessageTag(formattedEmail, type)} />
-              </div>
-              <motion.span 
-                className="text-xs text-gray-500"
-                whileHover={{ scale: 1.02 }}
-              >
-                {type === 'sent' ? sender.email : formattedEmail.from}
-              </motion.span>
+            <div className="flex items-center gap-2">
+              <span className="font-medium">
+                {senderInfo.name}
+              </span>
+              <TagBadge tag={messageTag} />
             </div>
-            <motion.span 
-              className="text-sm text-gray-500 ml-2 whitespace-nowrap"
-              whileHover={{ scale: 1.02 }}
-            >
-              {messageDate ? getFormattedDate(messageDate) : 'Unknown date'}
-            </motion.span>
+            <span className="text-sm text-gray-500 whitespace-nowrap">
+              {formatDistanceToNow(new Date(email.date), { addSuffix: true })}
+            </span>
           </div>
-          <h3 className="text-sm font-medium text-gray-800 mb-1 truncate">
-            {formattedEmail.subject || '(No Subject)'}
-          </h3>
-          <p className="text-sm text-gray-500 line-clamp-2 overflow-hidden">
-            {getPreviewText(formattedEmail.content || 'No message content')}
-          </p>
+          
+          <div className="flex items-start justify-between">
+            <div className="flex-1 min-w-0">
+              <h3 className={`text-sm ${!formattedEmail.read ? 'font-semibold text-gray-900' : 'font-medium text-gray-600'} truncate mb-1`}>
+                {formattedEmail.subject || '(No Subject)'}
+              </h3>
+              <p className="text-sm text-gray-500 line-clamp-1">
+                {getPreviewText(formattedEmail.content)}
+              </p>
+            </div>
+            
+            <div className="hidden group-hover:flex items-center gap-2 ml-4">
+              <motion.button
+                whileHover={{ scale: 1.1 }}
+                whileTap={{ scale: 0.95 }}
+                className="p-1.5 rounded-full hover:bg-gray-100"
+              >
+                <MdArchive className="w-5 h-5 text-gray-500" />
+              </motion.button>
+              <motion.button
+                whileHover={{ scale: 1.1 }}
+                whileTap={{ scale: 0.95 }}
+                className="p-1.5 rounded-full hover:bg-gray-100"
+              >
+                <MdDelete className="w-5 h-5 text-gray-500" />
+              </motion.button>
+            </div>
+          </div>
         </div>
-
-        {/* Hover Actions */}
-        <motion.div
-          initial={{ opacity: 0, x: 20 }}
-          whileHover={{ opacity: 1, x: 0 }}
-          className="hidden group-hover:flex items-center gap-2 absolute right-4"
-        >
-          <motion.button
-            whileHover={{ scale: 1.1 }}
-            whileTap={{ scale: 0.95 }}
-            className="p-1 rounded-full hover:bg-gray-100"
-          >
-            <MdArchive className="w-5 h-5 text-gray-500" />
-          </motion.button>
-          <motion.button
-            whileHover={{ scale: 1.1 }}
-            whileTap={{ scale: 0.95 }}
-            className="p-1 rounded-full hover:bg-gray-100"
-          >
-            <MdDelete className="w-5 h-5 text-gray-500" />
-          </motion.button> {/* Corrected closing tag */}
-        </motion.div>
       </div>
     </motion.div>
   );
@@ -318,6 +326,12 @@ const EmailList = ({ emails = [], type, selectedEmails = [], setSelectedEmails, 
   const [isClient, setIsClient] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true); // renamed from isLoading
   const [selectedEmail, setSelectedEmail] = useState(null);
+  const seenMessages = React.useRef(new Set());
+
+  // Reset seen messages when emails change
+  useEffect(() => {
+    seenMessages.current.clear();
+  }, [emails]);
 
   useEffect(() => {
     setIsClient(true);
@@ -352,6 +366,14 @@ const EmailList = ({ emails = [], type, selectedEmails = [], setSelectedEmails, 
     const formattedEmails = (Array.isArray(emails) ? emails : [])
       .map(formatEmail)
       .filter(Boolean)
+      .filter(email => {
+        const messageKey = email.id || email.messageId || email.date?.toString();
+        if (seenMessages.current.has(messageKey)) {
+          return false;
+        }
+        seenMessages.current.add(messageKey);
+        return true;
+      })
       .sort((a, b) => new Date(b.date) - new Date(a.date));
     return formattedEmails;
   }, [emails]);

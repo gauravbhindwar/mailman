@@ -243,60 +243,64 @@ const formatEmailAddress = (addr) => {
   return text || '';
 };
 
+const cleanEmailContent = (content) => {
+  if (!content) return '';
+
+  // Remove email boundary markers
+  content = content.replace(/--[0-9a-f]{32,}(-{2})?/gi, '');
+  
+  // Remove Content-Type headers
+  content = content.replace(/Content-Type: [^\n]+(\n|$)/gi, '');
+  
+  // Remove Content-Transfer-Encoding headers
+  content = content.replace(/Content-Transfer-Encoding: [^\n]+(\n|$)/gi, '');
+  
+  // Remove charset declarations
+  content = content.replace(/charset=["\']?[\w-]+["\']?/gi, '');
+  
+  // Clean up multiple newlines
+  content = content.replace(/\n{3,}/g, '\n\n');
+  
+  return content.trim();
+};
+
 const processMessage = async (rawEmail, attrs = {}) => {
   try {
     const parsed = await simpleParser(rawEmail);
     const envelope = attrs.envelope || {};
     
-    // Extract sender details with better fallbacks
-    const fromEnvelope = envelope.from?.[0] || {};
+    // Extract email addresses more reliably
     const fromHeader = parsed.from?.value?.[0] || {};
-    
-    // Build sender information
-    const senderName = fromEnvelope.name || 
-                      fromHeader.name || 
-                      parsed.from?.text?.split('<')[0]?.trim() || 
-                      fromEnvelope.mailbox || 
-                      '';
-                      
-    const senderEmail = fromEnvelope.mailbox && fromEnvelope.host ? 
-      `${fromEnvelope.mailbox}@${fromEnvelope.host}` : 
-      fromHeader.address || 
-      parsed.from?.text?.match(/<(.+)>/)?.[1] || 
-      '';
+    const fromAddress = fromHeader.address || 
+                       parsed.from?.text?.match(/<(.+?)>$/)?.[1] || 
+                       parsed.from?.text || '';
+    const fromName = fromHeader.name || 
+                    fromAddress.split('@')[0] || 
+                    'Unknown Sender';
 
-    // Extract recipient details
-    const toEnvelope = envelope.to?.[0] || {};
-    const toHeader = parsed.to?.value?.[0] || {};
-    
-    const recipientName = toEnvelope.name || toHeader.name || '';
-    const recipientEmail = toEnvelope.mailbox && toEnvelope.host ? 
-      `${toEnvelope.mailbox}@${toEnvelope.host}` : 
-      toHeader.address || '';
+    // Format sender string properly
+    const from = fromName !== fromAddress ? 
+      `${fromName} <${fromAddress}>` : 
+      fromAddress;
 
-    // Format sender/recipient strings
-    const from = senderName ? `${senderName} <${senderEmail}>` : senderEmail;
-    const to = recipientName ? `${recipientName} <${recipientEmail}>` : recipientEmail;
+    // Get actual content
+    const content = parsed.text || parsed.textAsHtml || parsed.html || '';
+    const cleanedContent = content ? cleanEmailContent(content) : '';
+
+    // Get subject with fallback
+    const subject = parsed.subject || '(No Subject)';
 
     return {
       // ...existing code...
       from,
       fromDetails: {
-        name: senderName.replace(/["']/g, '').trim(),
-        email: senderEmail,
-        raw: from,
-        mailbox: fromEnvelope.mailbox || '',
-        host: fromEnvelope.host || '',
-        displayName: senderName || senderEmail.split('@')[0] || 'Unknown'
+        name: fromName,
+        email: fromAddress,
+        displayName: fromName
       },
-      to,
-      toDetails: {
-        name: recipientName.replace(/["']/g, '').trim(),
-        email: recipientEmail,
-        raw: to,
-        mailbox: toEnvelope.mailbox || '',
-        host: toEnvelope.host || ''
-      },
+      subject,
+      content: cleanedContent || 'No message content',
+      date: parsed.date || new Date(),
       // ...existing code...
     };
   } catch (error) {
@@ -442,13 +446,12 @@ export const fetchEmailsIMAP = async ({ userId, folder = 'inbox', page = 1, limi
   let imap = null;
 
   try {
-    const userConfig = await fetchAndDecryptEmailCredentials(userId);
     imap = await getImapConnection(userId);
 
     return await new Promise((resolve, reject) => {
       const imapFolder = FOLDER_MAPPING[folder.toLowerCase()] || folder;
       
-      imap.openBox(imapFolder, false, (err, box) => {
+      imap.openBox(imapFolder, false, async (err, box) => {
         if (err) {
           imap.end();
           return reject(err);
@@ -472,24 +475,17 @@ export const fetchEmailsIMAP = async ({ userId, folder = 'inbox', page = 1, limi
 
         const messages = [];
         const fetch = imap.seq.fetch(fetchSequence, {
-          bodies: ['HEADER', 'TEXT', ''],
-          struct: true
+          bodies: [''],
+          struct: true,
+          envelope: true
         });
 
         fetch.on('message', (msg) => {
-          const email = {};
+          const email = { attrs: null, buffer: '' };
 
           msg.on('body', (stream, info) => {
-            let buffer = '';
-            stream.on('data', (chunk) => buffer += chunk.toString('utf8'));
-            stream.once('end', () => {
-              if (info.which === 'HEADER') {
-                email.headers = Imap.parseHeader(buffer);
-              } else if (info.which === 'TEXT') {
-                email.text = buffer;
-              } else {
-                email.full = buffer;
-              }
+            stream.on('data', (chunk) => {
+              email.buffer += chunk.toString('utf8');
             });
           });
 
@@ -508,27 +504,41 @@ export const fetchEmailsIMAP = async ({ userId, folder = 'inbox', page = 1, limi
           reject(err);
         });
 
-        fetch.once('end', () => {
-          imap.end();
-          resolve({
-            success: true,
-            emails: messages.map(msg => ({
-              id: msg.attrs?.uid?.toString(),
-              from: msg.headers?.from?.[0] || '',
-              to: msg.headers?.to?.[0] || '',
-              subject: msg.headers?.subject?.[0] || '(No Subject)',
-              date: msg.headers?.date?.[0],
-              flags: msg.attrs?.flags || [],
-              labels: msg.attrs?.['x-gm-labels'] || [],
-              content: msg.text || msg.full || ''
-            })),
-            pagination: {
-              total,
-              pages: Math.ceil(total / limit),
-              current: page,
-              hasMore: end > 1
-            }
-          });
+        fetch.once('end', async () => {
+          try {
+            // Process all messages using processMessage
+            const processedEmails = await Promise.all(
+              messages.map(async (msg) => {
+                try {
+                  const processed = await processMessage(msg.buffer, msg.attrs);
+                  return {
+                    id: msg.attrs?.uid?.toString(),
+                    ...processed,
+                    flags: msg.attrs?.flags || [],
+                    labels: msg.attrs?.['x-gm-labels'] || []
+                  };
+                } catch (error) {
+                  console.error('Error processing message:', error);
+                  return null;
+                }
+              })
+            );
+
+            imap.end();
+            resolve({
+              success: true,
+              emails: processedEmails.filter(Boolean), // Remove any null results
+              pagination: {
+                total,
+                pages: Math.ceil(total / limit),
+                current: page,
+                hasMore: end > 1
+              }
+            });
+          } catch (error) {
+            imap.end();
+            reject(error);
+          }
         });
       });
     });
