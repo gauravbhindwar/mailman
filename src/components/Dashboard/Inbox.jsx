@@ -45,24 +45,24 @@ const fetcher = async (url) => {
 
 function EmailListToolbar({ selectedEmails, onRefresh, page, totalPages, onPageChange }) {
   return (
-    <div className="sticky top-0 z-50 bg-white shadow-sm">
+    <div className="sticky top-0 z-20 backdrop-blur-xl bg-white/5 border-b border-white/10">
       <motion.div 
         initial={{ y: -20, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
-        className="flex items-center justify-between px-4 py-2 border-b"
+        className="flex flex-wrap md:flex-nowrap items-center justify-between px-4 py-2 gap-2"
       >
         {/* Left side controls */}
-        <div className="flex items-center gap-4">
-          <button className="p-2 hover:bg-gray-100 rounded">
+        <div className="flex items-center gap-2 md:gap-4 overflow-x-auto">
+          <button className="p-2 hover:bg-white/10 rounded-full text-gray-300">
             {selectedEmails.length > 0 ? <MdCheckBox /> : <MdCheckBoxOutlineBlank />}
           </button>
           <button 
             onClick={onRefresh}
-            className="p-2 hover:bg-gray-100 rounded"
+            className="p-2 hover:bg-white/10 rounded-full text-gray-300"
           >
             <MdRefresh />
           </button>
-          <button className="p-2 hover:bg-gray-100 rounded">
+          <button className="p-2 hover:bg-white/10 rounded-full text-gray-300">
             <MdMoreVert />
           </button>
           {selectedEmails.length > 0 && (
@@ -87,20 +87,20 @@ function EmailListToolbar({ selectedEmails, onRefresh, page, totalPages, onPageC
           )}
         </div>
 
-        {/* Right side pagination - Always show */}
-        <div className="flex items-center gap-2">
+        {/* Right side pagination - Hide on very small screens, show on md and up */}
+        <div className="hidden md:flex items-center gap-2 flex-shrink-0">
           <button
             onClick={() => onPageChange(Math.max(1, page - 1))}
             disabled={page === 1}
-            className={`px-3 py-1 rounded-md border ${
+            className={`px-3 py-1 rounded-md border border-white/10 text-gray-300 ${
               page === 1 
-                ? 'bg-gray-50 text-gray-400 cursor-not-allowed'
-                : 'hover:bg-gray-50'
+                ? 'opacity-50 cursor-not-allowed'
+                : 'hover:bg-white/10'
             }`}
           >
             Previous
           </button>
-          <span className="text-sm text-gray-600 min-w-[100px] text-center">
+          <span className="text-sm text-gray-300 min-w-[100px] text-center">
             Page {page} of {totalPages}
           </span>
           <button
@@ -319,7 +319,7 @@ function InboxEmailList({ userId, page, setPage, showAll }) {
       />
       
       <div className="flex-1 overflow-hidden">
-        {emails.length > 0 ? (
+        <div className="h-[calc(100vh-180px)]"> {/* Adjust height to account for header and toolbar */}
           <EmailList 
             emails={emails} 
             type="inbox"
@@ -327,17 +327,10 @@ function InboxEmailList({ userId, page, setPage, showAll }) {
             setSelectedEmails={setSelectedEmails}
             itemVariants={itemVariants}
             showAll={showAll}
+            page={page}
+            limit={limit}
           />
-        ) : (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="text-center py-8 text-gray-500"
-          >
-            <p>No emails found</p>
-          </motion.div>
-        )}
+        </div>
       </div>
     </div>
   );
@@ -368,25 +361,27 @@ export default function InboxPage() {
   }
 
   return (
-    <div className="h-screen flex flex-col">
+    <div className="flex flex-col h-full">
+      <div className="flex-none">
       <motion.div 
-        initial={{ y: -20, opacity: 0 }}
+        initial={{ y: -10, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
-        className="flex justify-between items-center p-4 border-b bg-white z-10"
+        className="flex justify-between items-center p-2 border-b bg-gradient-to-r from-orange-300 to-purple-400 shadow-sm"
       >
-        <h2 className="text-xl font-bold">Inbox</h2>
-        <motion.div
-          whileHover={{ scale: 1.05 }}
-          whileTap={{ scale: 0.95 }}
-        >
-          <Link 
-            href="/dashboard/compose" 
-            className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+          <h2 className="text-xl font-semibold">Inbox</h2>
+          <motion.div
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
           >
-            Compose
-          </Link>
+             <Link 
+              href="/dashboard/compose" 
+              className="bg-gradient-to-r from-green-400 to-blue-500 text-white font-semibold px-4 py-2 rounded-lg shadow-sm hover:from-green-500 hover:to-blue-600 transform transition-transform duration-200 hover:scale-105"
+            >
+              Compose
+            </Link>
+          </motion.div>
         </motion.div>
-      </motion.div>
+      </div>
       
       <div className="flex-1 overflow-hidden">
         <InboxEmailList 
