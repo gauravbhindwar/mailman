@@ -48,13 +48,15 @@ const parseEmailContent = async (content) => {
 const DEFAULT_LIMIT = 10; // Reduced from 20
 const API_TIMEOUT = 20000; // 20 seconds
 
-export async function GET(request, context) {
+export async function GET(request) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT);
+  let isCancelled = false;
+  let cacheKey = null;
 
   try {
-    // Wait for params to be resolved
-    const folder = await context.params?.folder;
+    // Get folder from URL path instead of context.params
+    const folder = request.url.split('/').pop().split('?')[0];
 
     if (!folder) {
       clearTimeout(timeoutId);
@@ -72,7 +74,7 @@ export async function GET(request, context) {
     }
 
     // Check cache first
-    const cacheKey = getCacheKey(session.user.id, folder, page, limit);
+    cacheKey = getCacheKey(session.user.id, folder, page, limit);
     if (!refresh) {
       const cached = cache.get(cacheKey);
       if (cached) {
