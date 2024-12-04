@@ -375,67 +375,55 @@ const CONNECTION_TIMEOUT = 1000 * 60 * 5; // 5 minutes
 const getImapConnection = async (userConfig) => {
   try {
     const poolKey = `${userConfig.imap.user}:${Date.now()}`;
-    let connection = imapConnectionPool.get(poolKey);
-
-    if (connection?.state === 'disconnected') {
-      connection.end();
-      connection = null;
-    }
-
-    if (!connection) {
-      const password = userConfig.imap.password.includes(':') 
-        ? await decrypt(userConfig.imap.password)
-        : userConfig.imap.password;
-      
-      const imapConfig = {
-        user: userConfig.imap.user,
-        password,
-        ...(userConfig.imap.user.toLowerCase().endsWith('@gmail.com') ? GMAIL_IMAP_CONFIG : {
-          host: userConfig.imap.host,
-          port: userConfig.imap.port,
-          tls: true,
-          tlsOptions: { 
-            rejectUnauthorized: false,
-            servername: userConfig.imap.host
-          }
-        }),
-        keepalive: false, // Disable keepalive for Vercel
-        timeout: 10000, // 10 second timeout
-        connTimeout: 10000, // 10 second connection timeout
-        debug: process.env.NODE_ENV === 'development' ? console.log : null
-      };
-      
-      connection = new Imap(imapConfig);
-      
-      // Add connection timeout handler
-      const connectionTimeout = setTimeout(() => {
-        if (connection.state !== 'connected') {
-          connection.end();
-          imapConnectionPool.delete(poolKey);
-          throw new Error('IMAP connection timeout');
+    
+    const password = userConfig.imap.password.includes(':') 
+      ? await decrypt(userConfig.imap.password)
+      : userConfig.imap.password;
+    
+    const imapConfig = {
+      user: userConfig.imap.user,
+      password,
+      ...(userConfig.imap.user.toLowerCase().endsWith('@gmail.com') ? {
+        host: 'imap.gmail.com',
+        port: 993,
+        tls: true,
+        tlsOptions: { 
+          rejectUnauthorized: false,
+          servername: 'imap.gmail.com'
         }
-      }, 15000); // 15 second total timeout
+      } : {
+        host: userConfig.imap.host,
+        port: userConfig.imap.port,
+        tls: true,
+        tlsOptions: { rejectUnauthorized: false }
+      }),
+      keepalive: false,
+      connTimeout: CONNECTION_TIMEOUT,
+      authTimeout: CONNECTION_TIMEOUT
+    };
+    
+    const connection = new Imap(imapConfig);
+    
+    // Add abort controller for timeout
+    const abortController = new AbortController();
+    const timeoutId = setTimeout(() => {
+      abortController.abort();
+      connection.end();
+    }, OPERATION_TIMEOUT);
 
-      connection.on('ready', () => {
-        clearTimeout(connectionTimeout);
-      });
+    connection.once('error', (err) => {
+      clearTimeout(timeoutId);
+      console.error('IMAP connection error:', err);
+      connection.end();
+      imapConnectionPool.delete(poolKey);
+    });
 
-      connection.on('error', (err) => {
-        clearTimeout(connectionTimeout);
-        console.error('IMAP connection error:', err);
-        connection.end();
-        imapConnectionPool.delete(poolKey);
-      });
+    connection.once('end', () => {
+      clearTimeout(timeoutId);
+      imapConnectionPool.delete(poolKey);
+    });
 
-      imapConnectionPool.set(poolKey, connection);
-      
-      // Clean up connection after use
-      setTimeout(() => {
-        const conn = imapConnectionPool.get(poolKey);
-        if (conn?.end) conn.end();
-        imapConnectionPool.delete(poolKey);
-      }, 30000); // 30 second max connection time
-    }
+    imapConnectionPool.set(poolKey, connection);
 
     return connection;
   } catch (error) {
@@ -453,7 +441,7 @@ const DEFAULT_FETCH_OPTIONS = {
   flags: true
 };
 
-export const fetchEmailsIMAP = async (user, folder = 'inbox', page = 1, limit = 50) => {
+export const fetchEmailsIMAP = async (user, folder = 'inbox', page = 1, limit = 20) => {
   let imap = null;
   
   try {
@@ -491,6 +479,11 @@ export const fetchEmailsIMAP = async (user, folder = 'inbox', page = 1, limit = 
     imap = await getImapConnection(user.emailConfig);
     
     return new Promise((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        imap?.end();
+        reject(new Error('IMAP operation timeout'));
+      }, OPERATION_TIMEOUT);
+
       // Change allEmails to be an array since we're using push
       const allEmails = [];
       
@@ -560,6 +553,7 @@ export const fetchEmailsIMAP = async (user, folder = 'inbox', page = 1, limit = 
 
             fetch.once('end', () => {
               imap.end();
+              clearTimeout(timeoutId);
               
               // Sort the array directly
               const sortedEmails = allEmails.sort((a, b) => 
@@ -585,11 +579,13 @@ export const fetchEmailsIMAP = async (user, folder = 'inbox', page = 1, limit = 
       });
 
       imap.once('error', (err) => {
+        clearTimeout(timeoutId);
         console.error('IMAP connection error:', err);
         reject(err);
       });
 
       imap.once('end', () => {
+        clearTimeout(timeoutId);
         console.log('IMAP connection ended');
       });
 

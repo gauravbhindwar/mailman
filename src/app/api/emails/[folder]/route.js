@@ -42,28 +42,41 @@ const parseEmailContent = async (content) => {
   }
 };
 
+// Reduce the default limit for Vercel
+const DEFAULT_LIMIT = 20;
+const API_TIMEOUT = 25000; // 25 seconds, leaving buffer for Vercel's 30s limit
+
 export async function GET(req, context) {
+  let timeoutId;
+  
   try {
-    // Add timeout for the entire request
     const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('Request timeout')), 30000);
+      timeoutId = setTimeout(() => {
+        reject(new Error('TIMEOUT'));
+      }, API_TIMEOUT);
     });
 
     const resultPromise = (async () => {
       const { folder } = context.params;
+      const searchParams = new URL(req.url).searchParams;
       
-      // Early validation
-      const validFolders = ['inbox', 'sent', 'drafts', 'spam', 'trash', 'archive', 'starred', 'all'];
-      if (!folder || !validFolders.includes(folder.toLowerCase())) {
-        return NextResponse.json(
-          { error: "Invalid folder specified" }, 
-          { status: 400 }
-        );
-      }
+      // Enforce smaller limit for Vercel
+      const page = parseInt(searchParams.get('page')) || 1;
+      const limit = Math.min(parseInt(searchParams.get('limit')) || DEFAULT_LIMIT, DEFAULT_LIMIT);
+      const refresh = searchParams.get('refresh') === 'true';
 
       const session = await getServerSession(authOptions);
       if (!session?.user?.id) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      }
+
+      // Check cache first
+      const cacheKey = getCacheKey(session.user.id, folder, page, limit);
+      if (!refresh) {
+        const cached = cache.get(cacheKey);
+        if (cached) {
+          return NextResponse.json({ ...cached, cached: true });
+        }
       }
 
       await connect();
@@ -71,112 +84,47 @@ export async function GET(req, context) {
       const user = await User.findById(session.user.id)
         .select('+emailConfig.smtp.password +emailConfig.imap.password');
       
-      if (!user) {
-        return NextResponse.json({ error: "User not found" }, { status: 404 });
+      if (!user?.emailConfig?.imap) {
+        return NextResponse.json(
+          { error: "EMAIL_NOT_CONFIGURED" }, 
+          { status: 400 }
+        );
       }
 
-      if (!user.emailConfig?.imap) {
-        throw new Error('EMAIL_NOT_CONFIGURED');
-      }
-
-      const searchParams = new URL(req.url).searchParams;
-      const page = parseInt(searchParams.get('page')) || 1;
-      const limit = parseInt(searchParams.get('limit')) || 50;
-      const refresh = searchParams.get('refresh') === 'true';
-
-      // Enhanced folder mapping for Gmail and other providers
-      const folderMap = {
-        'sent': '[Gmail]/Sent Mail',
-        'all': '[Gmail]/All Mail',
-        'archive': '[Gmail]/All Mail',
-        'trash': '[Gmail]/Trash',
-        'spam': '[Gmail]/Spam',
-        'drafts': '[Gmail]/Drafts',
-        'starred': '[Gmail]/Starred',
-        'inbox': 'INBOX'
-      };
-
-      const folderPath = folderMap[folder.toLowerCase()] || folder;
-      console.log(`📂 Fetching emails from folder: ${folderPath}`);
-
-      const cacheKey = getCacheKey(user._id, folder, page, limit);
-      if (refresh) {
-        cache.del(cacheKey);
-      }
-
-      // Try cache first
-      const cached = !refresh && cache.get(cacheKey);
-      if (cached) {
-        console.log(`📫 Returning cached ${folder} emails`);
-        return NextResponse.json({ ...cached, cached: true });
-      }
-
-      // Log connection attempt
-      console.log('Attempting IMAP connection for user:', user._id);
-
-      // Fetch fresh emails
-      const result = await fetchEmailsIMAP(user, folderPath, page, limit);
+      // Fetch emails with timeout awareness
+      const result = await fetchEmailsIMAP(user, folder, page, limit);
       
-      if (!result?.success) {
-        throw new Error(result?.error || 'Failed to fetch emails');
+      if (result.success) {
+        cache.set(cacheKey, result, 60); // Cache for 1 minute
       }
 
-      // Parse MIME content for each email
-      const parsedEmails = await Promise.all(
-        result.emails.map(async (email) => {
-          if (email.content) {
-            try {
-              const parsedContent = await parseEmailContent(email.content);
-              return {
-                ...email,
-                content: parsedContent
-              };
-            } catch (error) {
-              console.error('Failed to parse email content:', error);
-              return {
-                ...email,
-                content: {
-                  html: '',
-                  text: String(email.content) || 'Failed to parse content',
-                  attachments: []
-                }
-              };
-            }
-          }
-          return email;
-        })
-      );
-
-      const response = {
-        ...result,
-        emails: parsedEmails,
-        cached: false
-      };
-
-      // Cache the result
-      cache.set(cacheKey, response, 30); // Cache for 30 seconds
-
-      return response;
+      return NextResponse.json(result);
     })();
 
-    // Race between timeout and actual execution
     const result = await Promise.race([resultPromise, timeoutPromise]);
-    return NextResponse.json(result);
+    clearTimeout(timeoutId);
+    return result;
 
   } catch (error) {
+    clearTimeout(timeoutId);
+    
     console.error('Email API Error:', {
       message: error.message,
-      stack: error.stack,
-      name: error.name
+      code: error.code
     });
 
-    // Return more detailed error for debugging
+    // Special handling for timeouts
+    if (error.message === 'TIMEOUT') {
+      return NextResponse.json({
+        error: 'Request timeout - please try again',
+        code: 'TIMEOUT'
+      }, { status: 504 });
+    }
+
     return NextResponse.json({
       error: 'Failed to fetch emails',
       details: error.message,
       code: error.code || 'UNKNOWN_ERROR'
-    }, { 
-      status: error.message === 'EMAIL_NOT_CONFIGURED' ? 400 : 500 
-    });
+    }, { status: 500 });
   }
 }
